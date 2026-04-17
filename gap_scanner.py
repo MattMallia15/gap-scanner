@@ -199,12 +199,19 @@ def get_volume_ratio(ticker: str) -> float:
 
 # ── Market condition ──────────────────────────────────────────────────────────
 def get_spy_change() -> float:
-    """Return SPY % change today vs previous close. 0.0 if unavailable."""
+    """
+    Return SPY % change based on pre-market price vs previous close.
+    This reflects market sentiment before the open, which is when the scanner runs.
+    Falls back to regular session change if pre-market data is unavailable.
+    """
     try:
-        hist = _ticker_history("SPY", period="2d", interval="1d", auto_adjust=True)
-        if len(hist) < 2:
+        prev_close = get_prev_close("SPY")
+        if not prev_close:
             return 0.0
-        return float((hist["Close"].iloc[-1] - hist["Close"].iloc[-2]) / hist["Close"].iloc[-2] * 100)
+        pm_price = get_premarket_price("SPY")
+        if not pm_price:
+            return 0.0
+        return float((pm_price - prev_close) / prev_close * 100)
     except Exception:
         return 0.0
 

@@ -197,6 +197,32 @@ def get_volume_ratio(ticker: str) -> float:
     return 0.0
 
 
+# ── Market condition ──────────────────────────────────────────────────────────
+def get_spy_change() -> float:
+    """Return SPY % change today vs previous close. 0.0 if unavailable."""
+    try:
+        hist = _ticker_history("SPY", period="2d", interval="1d", auto_adjust=True)
+        if len(hist) < 2:
+            return 0.0
+        return float((hist["Close"].iloc[-1] - hist["Close"].iloc[-2]) / hist["Close"].iloc[-2] * 100)
+    except Exception:
+        return 0.0
+
+
+def market_multiplier(spy_chg: float) -> float:
+    """
+    Widen stops/targets in strong up markets, tighten in down markets.
+    SPY > +0.5%  → 1.2x  (more room to run)
+    SPY < -0.5%  → 0.8x  (reduce exposure in weak market)
+    Otherwise    → 1.0x
+    """
+    if spy_chg > 0.5:
+        return 1.2
+    if spy_chg < -0.5:
+        return 0.8
+    return 1.0
+
+
 # ── News & catalyst detection ─────────────────────────────────────────────────
 def _classify(text: str) -> tuple[str, str]:
     """Return (catalyst_type, matched_keyword) or ('', '') if no match."""
@@ -279,6 +305,7 @@ def build_setup(
     volume_ratio: float,
     catalyst_type: str = "",
     catalyst_headline: str = "",
+    mkt_mult: float = 1.0,
     account_size: float = ACCOUNT_SIZE,
     risk_pct: float = RISK_PCT,
 ) -> TradeSetup:
@@ -287,11 +314,12 @@ def build_setup(
 
     gap_amount     = pm_price - prev_close
     entry          = pm_price
-    stop           = prev_close + (gap_amount * 0.5)  # midpoint of the gap
-    risk_per_share = max(entry - stop, 0.01)           # floor to avoid div/0
-    reward         = risk_per_share * 1.5              # 1.5:1 R:R
-    target         = entry + reward
-    rr_ratio       = reward / risk_per_share
+    base_stop_dist = gap_amount * 0.5                          # 50% of gap
+    stop           = entry - (base_stop_dist * mkt_mult)       # wider in up market, tighter in down
+    risk_per_share = max(entry - stop, 0.01)
+    reward         = risk_per_share * 1.5                      # 1.5:1 R:R
+    target         = entry + (reward * mkt_mult)               # wider target in up market
+    rr_ratio       = (target - entry) / risk_per_share
 
     dollar_risk = account_size * (risk_pct / 100)
     shares      = max(int(dollar_risk / risk_per_share), 0)
@@ -446,14 +474,25 @@ def scan(
     risk_pct: float = RISK_PCT,
 ) -> List[TradeSetup]:
 
-    now_et = datetime.now(ET)
-    print(f"\nGap and Go Scanner  —  {now_et.strftime('%Y-%m-%d %H:%M %Z')}")
+    now_et  = datetime.now(ET)
+    spy_chg = get_spy_change()
+    mult    = market_multiplier(spy_chg)
 
-    if now_et.weekday() == 0:   # Monday
+    if spy_chg > 0.5:
+        mkt_label = f"SPY {spy_chg:+.2f}%  — BULL DAY  (stops & targets widened 20%)"
+    elif spy_chg < -0.5:
+        mkt_label = f"SPY {spy_chg:+.2f}%  — BEAR DAY  (stops & targets tightened 20%)"
+    else:
+        mkt_label = f"SPY {spy_chg:+.2f}%  — NEUTRAL"
+
+    print(f"\nGap and Go Scanner  —  {now_et.strftime('%Y-%m-%d %H:%M %Z')}")
+    print(f"Market:  {mkt_label}")
+
+    if now_et.weekday() == 0:
         print("  WARNING: Monday gaps are less reliable — trade cautiously today.")
 
     print(f"Account: ${account_size:,.0f}  |  Risk: {risk_pct}%/trade  |  Min gap: {MIN_GAP_PCT}%")
-    print(f"Scanning {len(watchlist)} tickers (this may take ~60 seconds)...\n")
+    print(f"Scanning {len(watchlist)} tickers (this may take ~2 minutes)...\n")
 
     all_setups: List[TradeSetup] = []
 
@@ -480,7 +519,7 @@ def scan(
         catalyst_type, catalyst_headline = detect_catalyst(ticker)
 
         setup = build_setup(ticker, prev_close, pm_price, volume_ratio,
-                            catalyst_type, catalyst_headline, account_size, risk_pct)
+                            catalyst_type, catalyst_headline, mult, account_size, risk_pct)
         all_setups.append(setup)
 
         status    = "OK" if setup.valid else "filtered"
@@ -507,10 +546,12 @@ def scan(
             key=lambda x: x.gap_pct, reverse=True
         )[:5]
         if gapped:
-            print("\n  Closest gap-up candidates (did not pass all filters — trade levels shown for reference):")
+            print("\n  Closest gap-up candidates (did not pass all filters):")
             for s in gapped:
-                display_setup(s, show_trade_levels=True)
-                plot_setup(s)
+                gap_failed = any("maximum" in f or "minimum" in f and "Gap" in f for f in s.failures)
+                display_setup(s, show_trade_levels=not gap_failed)
+                if not gap_failed:
+                    plot_setup(s)
 
     print()
     return valid

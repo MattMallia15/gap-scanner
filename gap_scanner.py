@@ -285,10 +285,11 @@ def build_setup(
 
     gap_pct = (pm_price - prev_close) / prev_close * 100
 
+    gap_amount     = pm_price - prev_close
     entry          = pm_price
-    stop           = prev_close
-    risk_per_share = max(entry - stop, 0.01)   # floor to avoid div/0
-    reward         = risk_per_share * 2         # 2:1 R:R
+    stop           = prev_close + (gap_amount * 0.5)  # midpoint of the gap
+    risk_per_share = max(entry - stop, 0.01)           # floor to avoid div/0
+    reward         = risk_per_share * 1.5              # 1.5:1 R:R
     target         = entry + reward
     rr_ratio       = reward / risk_per_share
 
@@ -358,8 +359,8 @@ def display_setup(s: TradeSetup, show_trade_levels: bool = True) -> None:
     if show_trade_levels:
         print(f"  {'-' * 44}")
         print(f"  Entry:          ${s.entry_price:.2f}  (limit ~0.1% above ask after 9:35 AM)")
-        print(f"  CLOSE AT LOSS:  ${s.stop_loss:.2f}  — stop-loss at yesterday's close")
-        print(f"  CLOSE AT PROFIT:${s.target_price:.2f}  — 2:1 target ({s.rr_ratio:.0f}x your risk)")
+        print(f"  CLOSE AT LOSS:  ${s.stop_loss:.2f}  — stop-loss at 50% of pre-market gap")
+        print(f"  CLOSE AT PROFIT:${s.target_price:.2f}  — 1.5:1 target ({s.rr_ratio:.1f}x your risk)")
         print(f"  Risk / share:   ${s.risk_per_share:.2f}")
         print(f"  Reward / share: ${s.reward_per_share:.2f}")
         print(f"  Position Size:  {s.shares} shares  (${s.dollar_risk:.0f} max loss)")

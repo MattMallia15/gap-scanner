@@ -53,8 +53,21 @@ CATALYST_KEYWORDS: dict[str, list[str]] = {
 }
 
 DEFAULT_WATCHLIST = [
-    "AAPL", "NVDA", "MSFT", "GOOGL", "META", "AMZN", "TSLA", "AMD",
-    "NFLX", "JPM", "BAC", "COIN", "PLTR", "SOFI", "MARA", "SMCI",
+    # Mega-cap tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "AMD",
+    "ORCL", "CRM", "ADBE", "INTC", "QCOM", "TXN", "NOW",
+    # Finance
+    "JPM", "BAC", "GS", "MS", "WFC", "C", "BLK", "AXP", "SCHW",
+    # Energy
+    "XOM", "CVX", "COP", "SLB", "EOG",
+    # Healthcare
+    "JNJ", "UNH", "PFE", "ABBV", "MRK", "LLY", "TMO",
+    # Consumer
+    "WMT", "COST", "HD", "NKE", "MCD", "SBUX", "TGT",
+    # Media / Comms
+    "NFLX", "DIS", "CMCSA",
+    # High-volatility / momentum
+    "COIN", "PLTR", "SOFI", "HOOD", "UBER", "RBLX", "MARA", "SMCI",
 ]
 
 ET = pytz.timezone("America/New_York")

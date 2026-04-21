@@ -398,7 +398,12 @@ def display_setup(s: TradeSetup, show_trade_levels: bool = True) -> None:
         print(f"  CLOSE AT PROFIT:${s.target_price:.2f}  — 1.5:1 target ({s.rr_ratio:.1f}x your risk)")
         print(f"  Risk / share:   ${s.risk_per_share:.2f}")
         print(f"  Reward / share: ${s.reward_per_share:.2f}")
-        print(f"  Position Size:  {s.shares} shares  (${s.dollar_risk:.0f} max loss)")
+        position_value = s.shares * s.entry_price
+        pct_of_account = (position_value / ACCOUNT_SIZE) * 100
+        print(f"  Position Size:  {s.shares} shares")
+        print(f"  Capital Needed: ${position_value:,.0f}  ({pct_of_account:.1f}% of account)")
+        print(f"  Max Loss:       ${s.dollar_risk:.0f}  ({RISK_PCT}% of account)")
+        print(f"  Max Gain:       ${s.shares * s.reward_per_share:,.0f}")
         print(f"  Hard exit by:   11:00 AM ET regardless of P&L")
 
     for w in s.warnings:

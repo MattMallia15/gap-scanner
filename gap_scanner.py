@@ -91,12 +91,17 @@ class TradeSetup:
     rr_ratio:         float
     shares:           int
     dollar_risk:      float
-    valid:            bool
+    atr:              float     = 0.0
+    rsi:              float     = 0.0
+    sma20:            float     = 0.0
+    valid:            bool      = False
     catalyst_type:    str       = ""
     catalyst_headline: str      = ""
     failures:         List[str] = field(default_factory=list)
     warnings:         List[str] = field(default_factory=list)
 
+
+ATR_PERIOD = 14   # days used to calculate Average True Range
 
 # ── Data fetchers ──────────────────────────────────────────────────────────────
 def _ticker_history(ticker: str, **kwargs) -> pd.DataFrame:
@@ -195,6 +200,56 @@ def get_volume_ratio(ticker: str) -> float:
     except Exception:
         pass
     return 0.0
+
+
+def get_rsi(ticker: str, period: int = 14) -> Optional[float]:
+    """14-day RSI. Returns None if data unavailable."""
+    try:
+        hist = _ticker_history(ticker, period=f"{period + 10}d", interval="1d", auto_adjust=True)
+        if len(hist) < period + 1:
+            return None
+        delta = hist["Close"].diff()
+        gain  = delta.clip(lower=0).tail(period).mean()
+        loss  = (-delta.clip(upper=0)).tail(period).mean()
+        if loss == 0:
+            return 100.0
+        rs = gain / loss
+        return float(100 - (100 / (1 + rs)))
+    except Exception:
+        return None
+
+
+def get_sma(ticker: str, period: int = 20) -> Optional[float]:
+    """20-day simple moving average of closing price."""
+    try:
+        hist = _ticker_history(ticker, period=f"{period + 5}d", interval="1d", auto_adjust=True)
+        if len(hist) < period:
+            return None
+        return float(hist["Close"].tail(period).mean())
+    except Exception:
+        return None
+
+
+def get_atr(ticker: str, period: int = ATR_PERIOD) -> Optional[float]:
+    """
+    14-day Average True Range — measures how much the stock normally moves per day.
+    Used to set volatility-adaptive stop and target levels.
+    """
+    try:
+        hist = _ticker_history(ticker, period=f"{period + 5}d", interval="1d", auto_adjust=True)
+        if len(hist) < period:
+            return None
+        high  = hist["High"]
+        low   = hist["Low"]
+        close = hist["Close"].shift(1)
+        tr    = pd.concat([
+            high - low,
+            (high - close).abs(),
+            (low  - close).abs(),
+        ], axis=1).max(axis=1)
+        return float(tr.tail(period).mean())
+    except Exception:
+        return None
 
 
 # ── Market condition ──────────────────────────────────────────────────────────
@@ -313,20 +368,32 @@ def build_setup(
     catalyst_type: str = "",
     catalyst_headline: str = "",
     mkt_mult: float = 1.0,
+    atr: Optional[float] = None,
+    rsi: Optional[float] = None,
+    sma20: Optional[float] = None,
+    spy_gap_pct: float = 0.0,
     account_size: float = ACCOUNT_SIZE,
     risk_pct: float = RISK_PCT,
 ) -> TradeSetup:
 
     gap_pct = (pm_price - prev_close) / prev_close * 100
 
-    gap_amount     = pm_price - prev_close
-    entry          = pm_price
-    base_stop_dist = gap_amount * 0.5                          # 50% of gap
-    stop           = entry - (base_stop_dist * mkt_mult)       # wider in up market, tighter in down
-    risk_per_share = max(entry - stop, 0.01)
-    reward         = risk_per_share * 1.5                      # 1.5:1 R:R
-    target         = entry + (reward * mkt_mult)               # wider target in up market
-    rr_ratio       = (target - entry) / risk_per_share
+    entry = pm_price
+
+    if atr and atr > 0:
+        # Volatility-adaptive: stop = 1× ATR below entry, target = 1.5× ATR above (× market mult)
+        stop_dist = atr * mkt_mult
+        target_dist = atr * 1.5 * mkt_mult
+    else:
+        # Fallback: 50% of gap for stop, 1.5:1 R:R for target
+        stop_dist   = (pm_price - prev_close) * 0.5 * mkt_mult
+        target_dist = stop_dist * 1.5
+
+    stop           = entry - stop_dist
+    target         = entry + target_dist
+    risk_per_share = max(stop_dist, 0.01)
+    reward         = target_dist
+    rr_ratio       = reward / risk_per_share
 
     dollar_risk = account_size * (risk_pct / 100)
     shares      = max(int(dollar_risk / risk_per_share), 0)
@@ -334,19 +401,43 @@ def build_setup(
     failures: List[str] = []
     warnings: List[str] = []
 
+    # ── Core filters ───────────────────────────────────────────────────────────
     if gap_pct < MIN_GAP_PCT:
-        failures.append(f"Gap {gap_pct:.2f}% < minimum {MIN_GAP_PCT}%")
+        failures.append(f"Gap {gap_pct:.2f}% below minimum {MIN_GAP_PCT}%")
     if gap_pct > MAX_GAP_PCT:
-        failures.append(f"Gap {gap_pct:.2f}% > maximum {MAX_GAP_PCT}%  (too extended)")
+        failures.append(f"Gap {gap_pct:.2f}% above maximum {MAX_GAP_PCT}% — too extended")
     if volume_ratio < MIN_VOLUME_RATIO:
-        failures.append(f"Volume ratio {volume_ratio:.1f}x < minimum {MIN_VOLUME_RATIO}x")
-    if gap_pct > CAUTION_GAP_PCT:
-        warnings.append(
-            f"Gap > {CAUTION_GAP_PCT}% — momentum may already be exhausted, size down"
-        )
+        failures.append(f"Volume {volume_ratio:.1f}x below minimum {MIN_VOLUME_RATIO}x")
 
+    # ── Catalyst (hard requirement) ─────────────────────────────────────────────
     if not catalyst_type:
-        warnings.append("No known catalyst detected — confirm news manually before entering")
+        failures.append("No news catalyst detected — skip until confirmed")
+
+    # ── RSI: not overbought, not oversold ──────────────────────────────────────
+    if rsi is not None:
+        if rsi > 70:
+            failures.append(f"RSI {rsi:.0f} — overbought, gap likely to fade")
+        elif rsi < 30:
+            failures.append(f"RSI {rsi:.0f} — oversold, avoid gap-up in weak trend")
+
+    # ── Trend: price above 20-day SMA ──────────────────────────────────────────
+    if sma20 is not None and prev_close < sma20:
+        failures.append(f"Price ${prev_close:.2f} below 20-day SMA ${sma20:.2f} — downtrend")
+
+    # ── Relative strength: stock must gap more than SPY ────────────────────────
+    if spy_gap_pct > 0 and gap_pct <= spy_gap_pct:
+        failures.append(f"Gap {gap_pct:.2f}% not exceeding SPY {spy_gap_pct:.2f}% — no relative strength")
+
+    # ── ATR ratio: gap meaningful but not exhausted ────────────────────────────
+    if atr and atr > 0:
+        gap_atr_ratio = (pm_price - prev_close) / atr
+        if gap_atr_ratio < 0.5:
+            failures.append(f"Gap only {gap_atr_ratio:.1f}× ATR — too small to be meaningful")
+        elif gap_atr_ratio > 2.0:
+            failures.append(f"Gap {gap_atr_ratio:.1f}× ATR — move likely exhausted pre-market")
+
+    if gap_pct > CAUTION_GAP_PCT:
+        warnings.append(f"Gap > {CAUTION_GAP_PCT}% — momentum may already be played out")
 
     return TradeSetup(
         ticker=ticker,
@@ -362,6 +453,9 @@ def build_setup(
         rr_ratio=round(rr_ratio, 2),
         shares=shares,
         dollar_risk=round(dollar_risk, 2),
+        atr=round(atr, 2) if atr else 0.0,
+        rsi=round(rsi, 1) if rsi else 0.0,
+        sma20=round(sma20, 2) if sma20 else 0.0,
         valid=len(failures) == 0,
         catalyst_type=catalyst_type,
         catalyst_headline=catalyst_headline,
@@ -381,6 +475,14 @@ def display_setup(s: TradeSetup, show_trade_levels: bool = True) -> None:
     print(f"  Prev Close:     ${s.prev_close:.2f}")
     print(f"  Pre-mkt Price:  ${s.premarket_price:.2f}")
     print(f"  Volume Ratio:   {s.volume_ratio:.1f}x avg pre-market volume")
+    if s.rsi:
+        rsi_label = "overbought" if s.rsi > 70 else ("oversold" if s.rsi < 30 else "healthy")
+        print(f"  RSI (14):       {s.rsi:.0f}  [{rsi_label}]")
+    if s.sma20:
+        trend = "above" if s.prev_close >= s.sma20 else "BELOW"
+        print(f"  20-day SMA:     ${s.sma20:.2f}  [price {trend} SMA]")
+    if s.atr:
+        print(f"  ATR (14):       ${s.atr:.2f}  [daily volatility range]")
     if s.catalyst_type:
         print(f"  Catalyst:       [{s.catalyst_type}]")
         print(f"  Headline:       {s.catalyst_headline}")
@@ -528,10 +630,14 @@ def scan(
             continue
 
         volume_ratio = get_volume_ratio(ticker)
+        atr          = get_atr(ticker)
+        rsi          = get_rsi(ticker)
+        sma20        = get_sma(ticker)
         catalyst_type, catalyst_headline = detect_catalyst(ticker)
 
         setup = build_setup(ticker, prev_close, pm_price, volume_ratio,
-                            catalyst_type, catalyst_headline, mult, account_size, risk_pct)
+                            catalyst_type, catalyst_headline, mult, atr,
+                            rsi, sma20, spy_chg, account_size, risk_pct)
         all_setups.append(setup)
 
         status    = "OK" if setup.valid else "filtered"

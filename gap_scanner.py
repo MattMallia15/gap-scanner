@@ -124,73 +124,78 @@ def _polygon_snapshot(ticker: str) -> Optional[dict]:
 
 
 def get_prev_close(ticker: str) -> Optional[float]:
-    """Previous trading day closing price from Polygon."""
-    snap = _polygon_snapshot(ticker)
-    if snap:
-        prev = snap.get("prevDay", {})
-        c = prev.get("c")
-        if c:
-            return float(c)
-    # fallback to yfinance
+    """Previous trading day closing price — yfinance primary, Polygon fallback."""
     try:
         hist = _ticker_history(ticker, period="5d", interval="1d", auto_adjust=True)
         if not hist.empty and len(hist) >= 2:
             return float(hist["Close"].iloc[-2])
     except Exception:
         pass
+    # Polygon fallback
+    snap = _polygon_snapshot(ticker)
+    if snap:
+        c = snap.get("prevDay", {}).get("c")
+        if c:
+            return float(c)
     return None
 
 
 def get_premarket_price(ticker: str) -> Optional[float]:
-    """Latest price from Polygon snapshot (includes pre-market)."""
-    snap = _polygon_snapshot(ticker)
-    if snap:
-        # fmv = fair market value (pre/post market price when available)
-        fmv = snap.get("fmv")
-        if fmv:
-            return float(fmv)
-        last = snap.get("lastTrade", {}).get("p")
-        if last:
-            return float(last)
-        day_close = snap.get("day", {}).get("c")
-        if day_close:
-            return float(day_close)
-    # fallback to yfinance
+    """
+    Latest pre-market price.
+    yfinance primary (1m bars with prepost), Polygon snapshot fallback.
+    """
     try:
         hist = _ticker_history(ticker, period="2d", interval="1m", prepost=True)
         if not hist.empty:
             if hist.index.tz is None:
                 hist.index = hist.index.tz_localize("UTC")
             hist.index = hist.index.tz_convert(ET)
-            today     = datetime.now(ET).date()
-            day_rows  = hist[hist.index.date == today]
+            today = datetime.now(ET).date()
+            pm = hist[
+                (hist.index.date == today)
+                & (hist.index.time >= PREMARKET_START)
+                & (hist.index.time < MARKET_OPEN)
+            ]
+            if not pm.empty:
+                return float(pm["Close"].iloc[-1])
+            day_rows = hist[hist.index.date == today]
             if not day_rows.empty:
                 return float(day_rows["Close"].iloc[-1])
     except Exception:
         pass
+    # Polygon fallback
+    snap = _polygon_snapshot(ticker)
+    if snap:
+        for key in ("fmv", ):
+            val = snap.get(key)
+            if val:
+                return float(val)
+        last = snap.get("lastTrade", {}).get("p")
+        if last:
+            return float(last)
     return None
 
 
 def get_market_cap(ticker: str) -> Optional[float]:
-    """Return market cap in dollars from yfinance."""
+    """Return market cap in dollars — yfinance primary, Polygon fallback."""
     try:
         return float(yf.Ticker(ticker).fast_info.market_cap)
     except Exception:
-        return None
+        pass
+    snap = _polygon_snapshot(ticker)
+    if snap:
+        mc = snap.get("market_cap") or snap.get("marketCap")
+        if mc:
+            return float(mc)
+    return None
 
 
 def get_volume_ratio(ticker: str) -> float:
     """
-    Today's volume vs previous day volume from Polygon snapshot.
+    Today's volume vs 10-day average — yfinance primary, Polygon fallback.
     Returns 0.0 if data is unavailable.
     """
-    snap = _polygon_snapshot(ticker)
-    if snap:
-        today_vol = snap.get("day", {}).get("v", 0)
-        prev_vol  = snap.get("prevDay", {}).get("v", 0)
-        if prev_vol and prev_vol > 0:
-            return round(today_vol / prev_vol, 2)
-    # fallback to yfinance
     try:
         fi        = yf.Ticker(ticker).fast_info
         today_vol = fi.last_volume
@@ -199,6 +204,13 @@ def get_volume_ratio(ticker: str) -> float:
             return round(today_vol / avg_vol, 2)
     except Exception:
         pass
+    # Polygon fallback
+    snap = _polygon_snapshot(ticker)
+    if snap:
+        today_vol = snap.get("day", {}).get("v", 0)
+        prev_vol  = snap.get("prevDay", {}).get("v", 0)
+        if prev_vol and prev_vol > 0:
+            return round(today_vol / prev_vol, 2)
     return 0.0
 
 

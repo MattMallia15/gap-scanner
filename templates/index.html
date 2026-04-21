@@ -224,6 +224,19 @@
 </main>
 
 <script>
+async function loadSpy() {
+  try {
+    const res  = await fetch('/spy');
+    const data = await res.json();
+    const pill = document.getElementById('market-pill');
+    const sign = data.spy_chg >= 0 ? '+' : '';
+    pill.textContent = `S&P 500 pre-market  ${sign}${data.spy_chg.toFixed(2)}%  · ${data.label}`;
+    pill.className = 'market-pill ' + (data.spy_chg > 0.5 ? 'pill-bull' : data.spy_chg < -0.5 ? 'pill-bear' : 'pill-neutral');
+  } catch(e) {}
+}
+
+window.addEventListener('load', loadSpy);
+
 async function runScan() {
   const btn = document.getElementById('scanBtn');
   const spinner = document.getElementById('spinner');

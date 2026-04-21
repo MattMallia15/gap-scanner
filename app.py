@@ -39,6 +39,19 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/spy")
+def spy():
+    spy_chg = get_spy_change()
+    mult    = market_multiplier(spy_chg)
+    if spy_chg > 0.5:
+        label = "BULL DAY"
+    elif spy_chg < -0.5:
+        label = "BEAR DAY"
+    else:
+        label = "NEUTRAL"
+    return jsonify({"spy_chg": round(spy_chg, 2), "mult": round(mult, 2), "label": label})
+
+
 @app.route("/scan")
 def scan():
     now_et  = datetime.now(ET)

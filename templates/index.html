@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Gap & Go Scanner</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0a0a0f;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', sans-serif;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: #0f0f1a;
+      border-bottom: 1px solid #1e1e2e;
+      padding: 18px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 { font-size: 1.4rem; color: #4fc3f7; letter-spacing: 1px; }
+    header .sub { font-size: 0.8rem; color: #666; margin-top: 2px; }
+
+    /* ── Main layout ── */
+    main { max-width: 1300px; margin: 0 auto; padding: 28px 24px; }
+
+    /* ── Control bar ── */
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+    }
+
+    .btn-scan {
+      background: #4fc3f7;
+      color: #0a0a0f;
+      border: none;
+      padding: 12px 32px;
+      font-size: 1rem;
+      font-weight: 700;
+      border-radius: 6px;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+      transition: background 0.2s;
+    }
+    .btn-scan:hover { background: #81d4fa; }
+    .btn-scan:disabled { background: #2a4a5a; color: #666; cursor: not-allowed; }
+
+    .market-pill {
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .pill-bull  { background: #1a3a1a; color: #66bb6a; border: 1px solid #2e5e2e; }
+    .pill-bear  { background: #3a1a1a; color: #ef5350; border: 1px solid #5e2e2e; }
+    .pill-neutral { background: #1a1a2a; color: #aaaaaa; border: 1px solid #2e2e4e; }
+
+    .status-msg { font-size: 0.85rem; color: #888; }
+
+    /* ── Summary cards ── */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 14px;
+      margin-bottom: 32px;
+    }
+    .stat-card {
+      background: #0f0f1a;
+      border: 1px solid #1e1e2e;
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+    }
+    .stat-card .val  { font-size: 1.8rem; font-weight: 700; color: #4fc3f7; }
+    .stat-card .lbl  { font-size: 0.75rem; color: #666; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    /* ── Setup cards ── */
+    .section-title {
+      font-size: 1rem;
+      color: #aaa;
+      margin-bottom: 14px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .setups-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 20px;
+      margin-bottom: 36px;
+    }
+
+    .setup-card {
+      background: #0f0f1a;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #1e1e2e;
+    }
+    .setup-card.valid   { border-color: #2e5e2e; }
+    .setup-card.invalid { border-color: #1e1e2e; }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 18px;
+      border-bottom: 1px solid #1e1e2e;
+    }
+    .card-header .ticker { font-size: 1.2rem; font-weight: 700; color: #fff; }
+    .card-header .gap    { font-size: 1.1rem; font-weight: 700; }
+    .gap-up   { color: #66bb6a; }
+    .gap-down { color: #ef5350; }
+
+    .badge {
+      font-size: 0.7rem;
+      padding: 3px 8px;
+      border-radius: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .badge-valid    { background: #1a4a1a; color: #66bb6a; }
+    .badge-filtered { background: #1a1a1a; color: #888; }
+    .badge-catalyst { background: #1a2a3a; color: #4fc3f7; margin-left: 6px; }
+
+    .card-body { padding: 16px 18px; }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      padding: 5px 0;
+      font-size: 0.85rem;
+      border-bottom: 1px solid #14141e;
+    }
+    .row:last-child { border-bottom: none; }
+    .row .key { color: #888; }
+    .row .val-green { color: #66bb6a; font-weight: 600; }
+    .row .val-red   { color: #ef5350; font-weight: 600; }
+    .row .val-white { color: #fff;    font-weight: 600; }
+    .row .val-blue  { color: #4fc3f7; font-weight: 600; }
+
+    .fails {
+      margin-top: 10px;
+      padding: 8px 10px;
+      background: #1a0f0f;
+      border-radius: 6px;
+      border-left: 3px solid #ef5350;
+    }
+    .fails p { font-size: 0.78rem; color: #ef9090; margin: 2px 0; }
+
+    .chart-wrap { padding: 0 18px 16px; }
+
+    /* ── Loading spinner ── */
+    .spinner {
+      display: none;
+      width: 22px; height: 22px;
+      border: 3px solid #1e1e2e;
+      border-top-color: #4fc3f7;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Empty state ── */
+    .empty { text-align: center; color: #555; padding: 60px 20px; font-size: 1rem; }
+
+    /* ── Timestamp ── */
+    .timestamp { font-size: 0.78rem; color: #444; margin-top: 32px; text-align: right; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Gap &amp; Go Scanner</h1>
+    <div class="sub">Pre-market momentum scanner · Gap 2–5% · $10,000 account</div>
+  </div>
+  <div id="market-pill" class="market-pill pill-neutral">SPY —</div>
+</header>
+
+<main>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button class="btn-scan" id="scanBtn" onclick="runScan()">▶ Run Scan</button>
+    <div class="spinner" id="spinner"></div>
+    <span class="status-msg" id="statusMsg">Press Run Scan to fetch pre-market data.</span>
+  </div>
+
+  <!-- Summary stats -->
+  <div class="summary-grid" id="summaryGrid" style="display:none">
+    <div class="stat-card"><div class="val" id="s-total">—</div><div class="lbl">Tickers Scanned</div></div>
+    <div class="stat-card"><div class="val" id="s-valid">—</div><div class="lbl">Valid Setups</div></div>
+    <div class="stat-card"><div class="val" id="s-spy">—</div><div class="lbl">SPY Move</div></div>
+    <div class="stat-card"><div class="val" id="s-mult">—</div><div class="lbl">Market Mult</div></div>
+  </div>
+
+  <!-- Valid setups -->
+  <div id="validSection" style="display:none">
+    <div class="section-title">✅ Valid Setups</div>
+    <div class="setups-grid" id="validGrid"></div>
+  </div>
+
+  <!-- Candidates -->
+  <div id="candidateSection" style="display:none">
+    <div class="section-title">Closest Candidates</div>
+    <div class="setups-grid" id="candidateGrid"></div>
+  </div>
+
+  <div class="empty" id="emptyMsg" style="display:none">
+    No qualifying setups right now. Run the scanner between 8:00–9:25 AM ET for best results.
+  </div>
+
+  <div class="timestamp" id="timestamp"></div>
+
+</main>
+
+<script>
+async function runScan() {
+  const btn = document.getElementById('scanBtn');
+  const spinner = document.getElementById('spinner');
+  const status  = document.getElementById('statusMsg');
+
+  btn.disabled = true;
+  spinner.style.display = 'block';
+  status.textContent = 'Scanning 54 tickers — this takes ~2 minutes…';
+
+  document.getElementById('summaryGrid').style.display = 'none';
+  document.getElementById('validSection').style.display = 'none';
+  document.getElementById('candidateSection').style.display = 'none';
+  document.getElementById('emptyMsg').style.display = 'none';
+
+  try {
+    const res  = await fetch('/scan');
+    const data = await res.json();
+    renderResults(data);
+  } catch(e) {
+    status.textContent = 'Error running scan. Check the terminal for details.';
+  } finally {
+    btn.disabled = false;
+    spinner.style.display = 'none';
+  }
+}
+
+function renderResults(data) {
+  const status = document.getElementById('statusMsg');
+  status.textContent = `Scan complete — ${data.valid.length} valid setup(s) found.`;
+
+  // Market pill
+  const pill = document.getElementById('market-pill');
+  pill.textContent = `SPY ${data.spy_chg > 0 ? '+' : ''}${data.spy_chg.toFixed(2)}%`;
+  pill.className = 'market-pill ' + (data.spy_chg > 0.5 ? 'pill-bull' : data.spy_chg < -0.5 ? 'pill-bear' : 'pill-neutral');
+
+  // Summary
+  document.getElementById('s-total').textContent = data.total;
+  document.getElementById('s-valid').textContent = data.valid.length;
+  document.getElementById('s-spy').textContent   = (data.spy_chg > 0 ? '+' : '') + data.spy_chg.toFixed(2) + '%';
+  document.getElementById('s-mult').textContent  = data.mult.toFixed(1) + 'x';
+  document.getElementById('summaryGrid').style.display = 'grid';
+
+  // Valid setups
+  if (data.valid.length > 0) {
+    document.getElementById('validGrid').innerHTML = data.valid.map(s => setupCard(s, true)).join('');
+    document.getElementById('validSection').style.display = 'block';
+    data.valid.forEach(s => drawChart(s));
+  }
+
+  // Candidates
+  if (data.candidates.length > 0) {
+    document.getElementById('candidateGrid').innerHTML = data.candidates.map(s => setupCard(s, false)).join('');
+    document.getElementById('candidateSection').style.display = 'block';
+    data.candidates.forEach(s => drawChart(s));
+  }
+
+  if (data.valid.length === 0 && data.candidates.length === 0) {
+    document.getElementById('emptyMsg').style.display = 'block';
+  }
+
+  document.getElementById('timestamp').textContent = 'Last scan: ' + data.timestamp;
+}
+
+function setupCard(s, valid) {
+  const gapClass = s.gap_pct >= 0 ? 'gap-up' : 'gap-down';
+  const gapSign  = s.gap_pct >= 0 ? '+' : '';
+  const catBadge = s.catalyst_type ? `<span class="badge badge-catalyst">${s.catalyst_type}</span>` : '';
+  const failsHtml = s.failures.length
+    ? `<div class="fails">${s.failures.map(f => `<p>✗ ${f}</p>`).join('')}</div>` : '';
+
+  const levels = valid || (!valid && !s.failures.some(f => f.includes('maximum') || f.includes('minimum') && f.includes('Gap')))
+    ? `
+      <div class="row"><span class="key">Entry</span><span class="val-white">$${s.entry_price.toFixed(2)}</span></div>
+      <div class="row"><span class="key">Close at Loss</span><span class="val-red">$${s.stop_loss.toFixed(2)}</span></div>
+      <div class="row"><span class="key">Close at Profit</span><span class="val-green">$${s.target_price.toFixed(2)}</span></div>
+      <div class="row"><span class="key">Risk / share</span><span class="val-white">$${s.risk_per_share.toFixed(2)}</span></div>
+      <div class="row"><span class="key">Reward / share</span><span class="val-white">$${s.reward_per_share.toFixed(2)}</span></div>
+      <div class="row"><span class="key">Position Size</span><span class="val-blue">${s.shares} shares</span></div>
+      <div class="row"><span class="key">Capital Needed</span><span class="val-blue">$${(s.shares * s.entry_price).toFixed(0)}</span></div>
+      <div class="row"><span class="key">Max Loss</span><span class="val-red">$${s.dollar_risk.toFixed(0)}</span></div>
+      <div class="row"><span class="key">Max Gain</span><span class="val-green">$${(s.shares * s.reward_per_share).toFixed(0)}</span></div>
+      <div class="row"><span class="key">Exit by</span><span class="val-white">11:00 AM ET</span></div>
+    ` : '';
+
+  return `
+    <div class="setup-card ${valid ? 'valid' : 'invalid'}" id="card-${s.ticker}">
+      <div class="card-header">
+        <div>
+          <span class="ticker">${s.ticker}</span>
+          <span class="badge ${valid ? 'badge-valid' : 'badge-filtered'}">${valid ? 'VALID' : 'FILTERED'}</span>
+          ${catBadge}
+        </div>
+        <span class="gap ${gapClass}">${gapSign}${s.gap_pct.toFixed(2)}%</span>
+      </div>
+      <div class="card-body">
+        <div class="row"><span class="key">Prev Close</span><span class="val-white">$${s.prev_close.toFixed(2)}</span></div>
+        <div class="row"><span class="key">Pre-mkt Price</span><span class="val-white">$${s.premarket_price.toFixed(2)}</span></div>
+        <div class="row"><span class="key">Volume Ratio</span><span class="${s.volume_ratio >= 2 ? 'val-green' : 'val-red'}">${s.volume_ratio.toFixed(1)}x</span></div>
+        ${s.rsi ? `<div class="row"><span class="key">RSI (14)</span><span class="${s.rsi > 70 ? 'val-red' : s.rsi < 30 ? 'val-red' : 'val-green'}">${s.rsi.toFixed(0)}</span></div>` : ''}
+        ${s.atr ? `<div class="row"><span class="key">ATR (14)</span><span class="val-white">$${s.atr.toFixed(2)}</span></div>` : ''}
+        ${levels}
+        ${failsHtml}
+        ${s.catalyst_headline ? `<div style="margin-top:10px;font-size:0.75rem;color:#5b8fa8;font-style:italic">"${s.catalyst_headline}"</div>` : ''}
+      </div>
+      <div class="chart-wrap" id="chart-${s.ticker}"></div>
+    </div>`;
+}
+
+function drawChart(s) {
+  const hist  = s.history;
+  if (!hist || hist.length === 0) return;
+
+  const dates  = hist.map(h => h.date);
+  const closes = hist.map(h => h.close);
+  dates.push('Today');
+  closes.push(null);
+
+  const layout = {
+    paper_bgcolor: '#0f0f1a', plot_bgcolor: '#0f0f1a',
+    margin: { t: 10, r: 80, b: 30, l: 50 },
+    height: 200,
+    xaxis: { color: '#555', gridcolor: '#1a1a2a', showgrid: false },
+    yaxis: { color: '#555', gridcolor: '#1a1a2a' },
+    showlegend: false,
+    shapes: [
+      { type:'line', x0:0, x1:1, xref:'paper', y0:s.stop_loss,   y1:s.stop_loss,   line:{color:'#ef5350',width:1.5,dash:'dash'} },
+      { type:'line', x0:0, x1:1, xref:'paper', y0:s.entry_price, y1:s.entry_price, line:{color:'#ffffff',width:1.5,dash:'dash'} },
+      { type:'line', x0:0, x1:1, xref:'paper', y0:s.target_price,y1:s.target_price,line:{color:'#66bb6a',width:1.5,dash:'dash'} },
+      { type:'rect', x0:0, x1:1, xref:'paper', y0:s.stop_loss, y1:s.entry_price,  fillcolor:'#ef5350', opacity:0.08, line:{width:0} },
+      { type:'rect', x0:0, x1:1, xref:'paper', y0:s.entry_price,y1:s.target_price,fillcolor:'#66bb6a', opacity:0.08, line:{width:0} },
+    ],
+    annotations: [
+      { x:1, xref:'paper', y:s.stop_loss,    text:`$${s.stop_loss.toFixed(2)}`,    showarrow:false, xanchor:'left', font:{color:'#ef5350',size:10} },
+      { x:1, xref:'paper', y:s.entry_price,  text:`$${s.entry_price.toFixed(2)}`,  showarrow:false, xanchor:'left', font:{color:'#ffffff',size:10} },
+      { x:1, xref:'paper', y:s.target_price, text:`$${s.target_price.toFixed(2)}`, showarrow:false, xanchor:'left', font:{color:'#66bb6a',size:10} },
+    ]
+  };
+
+  const traces = [
+    { x: dates, y: closes, type:'scatter', mode:'lines', line:{color:'#4fc3f7',width:2}, connectgaps: true },
+    { x: ['Today'], y: [s.premarket_price], type:'scatter', mode:'markers', marker:{color:'#ffffff',size:9,symbol:'triangle-up'} }
+  ];
+
+  Plotly.newPlot(`chart-${s.ticker}`, traces, layout, {displayModeBar: false, responsive: true});
+}
+</script>
+</body>
+</html>

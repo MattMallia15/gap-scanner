@@ -493,7 +493,7 @@ function emaCard(s, valid) {
         <div class="row"><span class="key">Exit by</span><span class="val-white">8:00 PM CET</span></div>
         ` : ''}
         ${failsHtml}${warnsHtml}
-        ${valid ? `<button class="log-btn" id="logbtn-ema-${s.ticker}" onclick="logTrade(this,'${key}','ema_crossover')">📋 Log this trade</button>` : ''}
+        <button class="log-btn" id="logbtn-ema-${s.ticker}" onclick="logTrade(this,'${key}','ema_crossover')">📋 Log this trade</button>
       </div>
     </div>`;
 }
@@ -647,7 +647,7 @@ function setupCard(s, valid, isAH = false) {
         ${failsHtml}
         ${warnsHtml}
         ${s.catalyst_headline ? `<div style="margin-top:10px;font-size:0.75rem;color:#5b8fa8;font-style:italic">"${s.catalyst_headline}"</div>` : ''}
-        ${valid ? `<button class="log-btn" id="logbtn-${s.ticker}" onclick="logTrade(this,'${key}','gap_go')">📋 Log this trade</button>` : ''}
+        <button class="log-btn" id="logbtn-${s.ticker}" onclick="logTrade(this,'${key}','gap_go')">📋 Log this trade</button>
       </div>
       <div class="chart-wrap" id="chart-${s.ticker}"></div>
     </div>`;

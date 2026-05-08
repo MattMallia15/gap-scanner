@@ -820,6 +820,9 @@ def scan_ema_crossover(
         risk      = entry - cross_low
         if risk <= 0:
             return None
+        # Minimum $0.10 risk — anything tighter is a candle too close to entry
+        if risk < 0.10:
+            return None
 
         target      = entry + 2.0 * risk
         dollar_risk = account_size * (risk_pct / 100)

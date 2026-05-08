@@ -5,9 +5,9 @@ Run: python app.py
 Then open: http://localhost:5000
 """
 
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 from datetime import datetime
-import pytz
+import pytz, json, uuid, os
 
 from gap_scanner import (
     DEFAULT_WATCHLIST, ACCOUNT_SIZE, RISK_PCT, MIN_GAP_PCT, MAX_GAP_PCT,
@@ -20,6 +20,18 @@ from gap_scanner import (
 )
 
 app = Flask(__name__)
+
+TRADES_FILE = os.path.join(os.path.dirname(__file__), "trades.json")
+
+def _load_trades() -> list:
+    if not os.path.exists(TRADES_FILE):
+        return []
+    with open(TRADES_FILE, "r") as f:
+        return json.load(f)
+
+def _save_trades(trades: list) -> None:
+    with open(TRADES_FILE, "w") as f:
+        json.dump(trades, f, indent=2)
 
 
 def get_history(ticker: str) -> list[dict]:
@@ -183,6 +195,68 @@ def scan_ema():
         "active":     active,
         "timestamp":  now_et.strftime("%Y-%m-%d %H:%M %Z"),
     })
+
+
+@app.route("/trades", methods=["GET"])
+def get_trades():
+    return jsonify(_load_trades())
+
+
+@app.route("/trades", methods=["POST"])
+def log_trade():
+    data   = request.get_json()
+    trades = _load_trades()
+    now_et = datetime.now(ET)
+    trade  = {
+        "id":               str(uuid.uuid4())[:8],
+        "strategy":         data.get("strategy", ""),
+        "ticker":           data.get("ticker", ""),
+        "opened_at":        now_et.strftime("%Y-%m-%d %H:%M %Z"),
+        "entry_price":      data.get("entry_price"),
+        "stop_loss":        data.get("stop_loss"),
+        "target_price":     data.get("target_price"),
+        "risk_per_share":   data.get("risk_per_share"),
+        "reward_per_share": data.get("reward_per_share"),
+        "shares":           data.get("shares"),
+        "dollar_risk":      data.get("dollar_risk"),
+        # Strategy-specific
+        "gap_pct":          data.get("gap_pct"),
+        "catalyst_type":    data.get("catalyst_type"),
+        "signal_time":      data.get("signal_time"),
+        # Exit (filled in later)
+        "closed_at":        None,
+        "exit_price":       None,
+        "pnl":              None,
+        "pnl_pct":          None,
+        "outcome":          None,
+    }
+    trades.append(trade)
+    _save_trades(trades)
+    return jsonify(trade), 201
+
+
+@app.route("/trades/<trade_id>", methods=["PUT"])
+def close_trade(trade_id):
+    data       = request.get_json()
+    exit_price = float(data.get("exit_price", 0))
+    trades     = _load_trades()
+    now_et     = datetime.now(ET)
+
+    for t in trades:
+        if t["id"] == trade_id:
+            t["exit_price"] = exit_price
+            t["closed_at"]  = now_et.strftime("%Y-%m-%d %H:%M %Z")
+            entry           = t.get("entry_price") or 0
+            shares          = t.get("shares") or 0
+            t["pnl"]        = round((exit_price - entry) * shares, 2)
+            t["pnl_pct"]    = round((exit_price - entry) / entry * 100, 2) if entry else 0
+            t["outcome"]    = "win" if exit_price >= t.get("target_price", exit_price) \
+                              else "loss" if exit_price <= t.get("stop_loss", exit_price) \
+                              else "scratch"
+            _save_trades(trades)
+            return jsonify(t)
+
+    return jsonify({"error": "trade not found"}), 404
 
 
 if __name__ == "__main__":

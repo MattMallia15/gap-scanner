@@ -219,6 +219,43 @@
     /* ── EMA card extras ── */
     .ema-times { font-size: 0.75rem; color: #666; margin-bottom: 6px; }
     .badge-ema { background: #1a2a1a; color: #a5d6a7; margin-left: 6px; }
+
+    /* ── Trade Journal ── */
+    .journal-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px; margin-bottom: 24px;
+    }
+    .log-btn {
+      margin-top: 12px; width: 100%; padding: 9px;
+      background: #1a2a1a; border: 1px solid #2e5e2e;
+      color: #66bb6a; border-radius: 6px; font-size: 0.82rem;
+      font-weight: 600; cursor: pointer; transition: background 0.15s;
+    }
+    .log-btn:hover  { background: #243a24; }
+    .log-btn.logged { background: #111; border-color: #333; color: #555; cursor: default; }
+    .journal-table  { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .journal-table th {
+      text-align: left; padding: 8px 10px; color: #666;
+      border-bottom: 1px solid #1e1e2e; font-weight: 600;
+      text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.5px;
+    }
+    .journal-table td { padding: 8px 10px; border-bottom: 1px solid #14141e; color: #ccc; }
+    .journal-table tr:hover td { background: #0f0f1a; }
+    .outcome-win    { color: #66bb6a; font-weight: 700; }
+    .outcome-loss   { color: #ef5350; font-weight: 700; }
+    .outcome-scratch{ color: #ffb74d; font-weight: 700; }
+    .exit-form  { display: flex; gap: 6px; align-items: center; }
+    .exit-input {
+      width: 80px; padding: 4px 7px;
+      background: #0f0f1a; border: 1px solid #2a2a3e;
+      color: #fff; border-radius: 4px; font-size: 0.8rem;
+    }
+    .exit-submit {
+      padding: 4px 10px; background: #1a2a3a; border: 1px solid #2e4e6e;
+      color: #4fc3f7; border-radius: 4px; font-size: 0.8rem; cursor: pointer;
+    }
+    .exit-submit:hover { background: #243a4a; }
   </style>
 </head>
 <body>
@@ -237,6 +274,7 @@
   <div class="strategy-tabs">
     <button class="tab-btn active" id="tab1" onclick="switchTab(1)">Strategy 1 · Gap &amp; Go</button>
     <button class="tab-btn"        id="tab2" onclick="switchTab(2)">Strategy 2 · EMA Crossover</button>
+    <button class="tab-btn"        id="tab3" onclick="switchTab(3)">📒 Trade Journal</button>
   </div>
 
   <!-- ── Strategy 1: Gap & Go ── -->
@@ -312,6 +350,34 @@
     </div>
     <div class="timestamp" id="emaTimestamp"></div>
   </div><!-- end strategy2 -->
+
+  <!-- ── Strategy 3: Trade Journal ── -->
+  <div id="strategy3" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <div class="section-title" style="margin:0">Trade Journal</div>
+      <button class="btn-scan" style="padding:8px 20px;font-size:0.85rem" onclick="loadJournal()">↻ Refresh</button>
+    </div>
+
+    <!-- Stats -->
+    <div class="journal-stats" id="journalStats"></div>
+
+    <!-- Table -->
+    <div style="background:#0f0f1a;border:1px solid #1e1e2e;border-radius:10px;overflow:auto">
+      <table class="journal-table">
+        <thead>
+          <tr>
+            <th>Date</th><th>Strategy</th><th>Ticker</th>
+            <th>Entry</th><th>Stop</th><th>Target</th>
+            <th>Shares</th><th>Exit Price</th><th>P&amp;L</th><th>Outcome</th>
+          </tr>
+        </thead>
+        <tbody id="journalBody">
+          <tr><td colspan="10" style="text-align:center;color:#444;padding:40px">No trades logged yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="timestamp" id="journalTimestamp"></div>
+  </div><!-- end strategy3 -->
 
 </main>
 
@@ -422,6 +488,7 @@ function emaCard(s, valid) {
         <div class="row"><span class="key">Exit by</span><span class="val-white">8:00 PM CET</span></div>
         ` : ''}
         ${failsHtml}${warnsHtml}
+        ${valid ? `<button class="log-btn" id="logbtn-ema-${s.ticker}" onclick="logTrade(this, ${JSON.stringify(s)}, 'ema_crossover')">📋 Log this trade</button>` : ''}
       </div>
     </div>`;
 }
@@ -570,6 +637,7 @@ function setupCard(s, valid, isAH = false) {
         ${failsHtml}
         ${warnsHtml}
         ${s.catalyst_headline ? `<div style="margin-top:10px;font-size:0.75rem;color:#5b8fa8;font-style:italic">"${s.catalyst_headline}"</div>` : ''}
+        ${valid ? `<button class="log-btn" id="logbtn-${s.ticker}" onclick="logTrade(this, ${JSON.stringify(s)}, 'gap_go')">📋 Log this trade</button>` : ''}
       </div>
       <div class="chart-wrap" id="chart-${s.ticker}"></div>
     </div>`;
@@ -611,6 +679,136 @@ function drawChart(s) {
   ];
 
   Plotly.newPlot(`chart-${s.ticker}`, traces, layout, {displayModeBar: false, responsive: true});
+}
+
+// ── Tab switcher update for journal ──────────────────────────────────────────
+const _origSwitchTab = switchTab;
+function switchTab(n) {
+  document.getElementById('strategy3').style.display = n === 3 ? 'block' : 'none';
+  document.getElementById('tab3').classList.toggle('active', n === 3);
+  if (n === 3) {
+    document.getElementById('strategy1').style.display = 'none';
+    document.getElementById('strategy2').style.display = 'none';
+    document.getElementById('tab1').classList.remove('active');
+    document.getElementById('tab2').classList.remove('active');
+    document.getElementById('header-title').textContent = 'Trade Journal';
+    document.getElementById('header-sub').textContent   = 'All logged trades · P&L tracking';
+    loadJournal();
+  } else {
+    _origSwitchTab(n);
+  }
+}
+
+// ── Log a trade ───────────────────────────────────────────────────────────────
+async function logTrade(btn, setup, strategy) {
+  btn.disabled = true;
+  btn.textContent = 'Logging…';
+  try {
+    const res = await fetch('/trades', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ ...setup, strategy })
+    });
+    if (res.ok) {
+      btn.textContent = '✓ Logged';
+      btn.classList.add('logged');
+    } else {
+      btn.textContent = '📋 Log this trade';
+      btn.disabled = false;
+    }
+  } catch(e) {
+    btn.textContent = '📋 Log this trade';
+    btn.disabled = false;
+  }
+}
+
+// ── Load journal ──────────────────────────────────────────────────────────────
+async function loadJournal() {
+  try {
+    const res    = await fetch('/trades');
+    const trades = await res.json();
+    renderJournal(trades);
+  } catch(e) {}
+}
+
+function renderJournal(trades) {
+  const body = document.getElementById('journalBody');
+  if (!trades.length) {
+    body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#444;padding:40px">No trades logged yet.</td></tr>';
+    document.getElementById('journalStats').innerHTML = '';
+    return;
+  }
+
+  // Stats per strategy
+  const stats = {};
+  trades.forEach(t => {
+    const k = t.strategy || 'unknown';
+    if (!stats[k]) stats[k] = { trades: 0, wins: 0, losses: 0, pnl: 0, open: 0 };
+    stats[k].trades++;
+    if (t.outcome === 'win')   stats[k].wins++;
+    if (t.outcome === 'loss')  stats[k].losses++;
+    if (t.pnl != null)         stats[k].pnl += t.pnl;
+    if (!t.closed_at)          stats[k].open++;
+  });
+
+  const stratLabel = { gap_go: 'Gap & Go', ema_crossover: 'EMA Crossover' };
+  const statsHtml = Object.entries(stats).map(([k, s]) => {
+    const wr = s.trades > 0 ? ((s.wins / (s.wins + s.losses)) * 100).toFixed(0) : '—';
+    const pnlColor = s.pnl >= 0 ? '#66bb6a' : '#ef5350';
+    return `
+      <div class="stat-card">
+        <div class="val" style="font-size:1rem;color:#4fc3f7">${stratLabel[k] || k}</div>
+        <div style="margin-top:8px;font-size:0.8rem;color:#aaa">${s.trades} trades · ${s.open} open</div>
+        <div style="font-size:0.9rem;color:#ccc;margin-top:4px">Win rate: <strong>${wr}%</strong></div>
+        <div style="font-size:1rem;color:${pnlColor};font-weight:700;margin-top:4px">P&L: $${s.pnl.toFixed(2)}</div>
+      </div>`;
+  }).join('');
+  document.getElementById('journalStats').innerHTML = statsHtml;
+
+  // Table rows (newest first)
+  const rows = [...trades].reverse().map(t => {
+    const pnlHtml  = t.pnl != null
+      ? `<span class="${t.pnl >= 0 ? 'outcome-win' : 'outcome-loss'}">$${t.pnl.toFixed(2)}</span>` : '—';
+    const outcomeHtml = t.outcome
+      ? `<span class="outcome-${t.outcome}">${t.outcome.toUpperCase()}</span>` : '—';
+    const exitCell = t.exit_price != null
+      ? `$${t.exit_price.toFixed(2)}`
+      : `<div class="exit-form">
+           <input class="exit-input" type="number" step="0.01" placeholder="Price" id="exit-${t.id}"/>
+           <button class="exit-submit" onclick="submitExit('${t.id}')">Close</button>
+         </div>`;
+    const strat = stratLabel[t.strategy] || t.strategy;
+    const extra = t.gap_pct != null ? ` (+${t.gap_pct}%)` : (t.signal_time ? ` @ ${t.signal_time}` : '');
+    return `<tr>
+      <td>${t.opened_at}</td>
+      <td><span style="color:#888;font-size:0.78rem">${strat}</span></td>
+      <td><strong style="color:#fff">${t.ticker}</strong><span style="color:#666;font-size:0.75rem">${extra}</span></td>
+      <td>$${(t.entry_price||0).toFixed(2)}</td>
+      <td style="color:#ef5350">$${(t.stop_loss||0).toFixed(2)}</td>
+      <td style="color:#66bb6a">$${(t.target_price||0).toFixed(2)}</td>
+      <td>${t.shares || '—'}</td>
+      <td>${exitCell}</td>
+      <td>${pnlHtml}</td>
+      <td>${outcomeHtml}</td>
+    </tr>`;
+  }).join('');
+
+  body.innerHTML = rows;
+  document.getElementById('journalTimestamp').textContent = `${trades.length} trade(s) total`;
+}
+
+async function submitExit(tradeId) {
+  const input = document.getElementById(`exit-${tradeId}`);
+  const price = parseFloat(input.value);
+  if (!price || price <= 0) { input.style.borderColor = '#ef5350'; return; }
+  try {
+    const res = await fetch(`/trades/${tradeId}`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ exit_price: price })
+    });
+    if (res.ok) loadJournal();
+  } catch(e) {}
 }
 </script>
 </body>

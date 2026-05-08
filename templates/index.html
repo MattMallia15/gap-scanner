@@ -285,11 +285,11 @@
     <div class="controls">
       <button class="btn-scan" id="scanBtnEma" onclick="runEMAScan()">▶ Scan EMA Crossover</button>
       <div class="spinner" id="spinnerEma"></div>
-      <span class="status-msg" id="statusMsgEma">Scans 16 liquid stocks for EMA(9)/EMA(21) crossovers after 10 AM.</span>
+      <span class="status-msg" id="statusMsgEma">Scans 16 liquid stocks for EMA(9)/EMA(21) crossovers after 4:00 PM CET.</span>
     </div>
 
     <div class="session-banner" id="emaOffHours" style="display:none">
-      ⏰ <strong>EMA Crossover is only active 10:00 AM – 2:00 PM ET.</strong> Come back during market hours.
+      ⏰ <strong>EMA Crossover is only active 4:00 PM – 8:00 PM CET.</strong> Come back during those hours.
     </div>
 
     <div class="summary-grid" id="emaSummaryGrid" style="display:none">
@@ -308,7 +308,7 @@
     </div>
 
     <div class="empty" id="emaEmptyMsg" style="display:none">
-      No EMA crossovers detected right now. Run between <strong>10:00 AM – 2:00 PM ET</strong>.
+      No EMA crossovers detected right now. Run between <strong>4:00 PM – 8:00 PM CET</strong>.
     </div>
     <div class="timestamp" id="emaTimestamp"></div>
   </div><!-- end strategy2 -->
@@ -327,7 +327,7 @@ function switchTab(n) {
     document.getElementById('header-sub').textContent   = 'Pre-market momentum scanner · Gap 2–8% · $10,000 account';
   } else {
     document.getElementById('header-title').textContent = 'EMA Crossover Scanner';
-    document.getElementById('header-sub').textContent   = 'EMA(9) / EMA(21) · 5-min candles · 10 AM – 2 PM ET';
+    document.getElementById('header-sub').textContent   = 'EMA(9) / EMA(21) · 5-min candles · 4:00 PM – 8:00 PM CET';
   }
 }
 
@@ -364,7 +364,7 @@ function renderEMAResults(data) {
 
   if (!data.active) {
     document.getElementById('emaOffHours').style.display = 'block';
-    status.textContent = 'EMA scanner is only active 10 AM – 2 PM ET.';
+    status.textContent = 'EMA scanner is only active 4:00 PM – 8:00 PM CET.';
     return;
   }
 
@@ -419,7 +419,7 @@ function emaCard(s, valid) {
         <div class="row"><span class="key">Capital Needed</span><span class="val-blue">$${(s.shares * s.entry_price).toFixed(0)}</span></div>
         <div class="row"><span class="key">Max Loss</span><span class="val-red">$${s.dollar_risk.toFixed(0)}</span></div>
         <div class="row"><span class="key">Max Gain</span><span class="val-green">$${(s.shares * s.reward_per_share).toFixed(0)}</span></div>
-        <div class="row"><span class="key">Exit by</span><span class="val-white">2:00 PM ET</span></div>
+        <div class="row"><span class="key">Exit by</span><span class="val-white">8:00 PM CET</span></div>
         ` : ''}
         ${failsHtml}${warnsHtml}
       </div>

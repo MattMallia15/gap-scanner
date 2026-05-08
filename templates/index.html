@@ -130,6 +130,18 @@
     .badge-valid    { background: #1a4a1a; color: #66bb6a; }
     .badge-filtered { background: #1a1a1a; color: #888; }
     .badge-catalyst { background: #1a2a3a; color: #4fc3f7; margin-left: 6px; }
+    .badge-ah       { background: #2a1a3a; color: #ce93d8; margin-left: 6px; }
+
+    .session-banner {
+      display: none;
+      background: #1a1228;
+      border: 1px solid #4a2a6a;
+      border-radius: 8px;
+      padding: 12px 18px;
+      margin-bottom: 20px;
+      color: #ce93d8;
+      font-size: 0.88rem;
+    }
 
     .card-body { padding: 16px 18px; }
 
@@ -155,6 +167,15 @@
       border-left: 3px solid #ef5350;
     }
     .fails p { font-size: 0.78rem; color: #ef9090; margin: 2px 0; }
+
+    .warns {
+      margin-top: 8px;
+      padding: 8px 10px;
+      background: #1a1500;
+      border-radius: 6px;
+      border-left: 3px solid #ffb74d;
+    }
+    .warns p { font-size: 0.78rem; color: #ffcc80; margin: 2px 0; }
 
     .chart-wrap { padding: 0 18px 16px; }
 
@@ -188,11 +209,17 @@
 
 <main>
 
+  <!-- After-hours banner -->
+  <div class="session-banner" id="ahBanner">
+    🌙 <strong>After-Hours Mode</strong> — Gaps shown vs today's regular close (4 PM).
+    These are <strong>tomorrow's watchlist</strong> — plan to enter at tomorrow's open if the move holds.
+  </div>
+
   <!-- Controls -->
   <div class="controls">
     <button class="btn-scan" id="scanBtn" onclick="runScan()">▶ Run Scan</button>
     <div class="spinner" id="spinner"></div>
-    <span class="status-msg" id="statusMsg">Press Run Scan to fetch pre-market data.</span>
+    <span class="status-msg" id="statusMsg">Press Run Scan to fetch data.</span>
   </div>
 
   <!-- Summary stats -->
@@ -216,7 +243,7 @@
   </div>
 
   <div class="empty" id="emptyMsg" style="display:none">
-    No qualifying setups right now. Run the scanner between 8:00–9:25 AM ET for best results.
+    No qualifying setups right now. Best times: <strong>8:00–9:25 AM ET</strong> (pre-market) or <strong>4:00–8:00 PM ET</strong> (after-hours).
   </div>
 
   <div class="timestamp" id="timestamp"></div>
@@ -225,15 +252,26 @@
 
 <script>
 async function loadSpy() {
+  const pill = document.getElementById('market-pill');
   try {
     const res  = await fetch('/spy');
+    if (!res.ok) throw new Error('bad response');
     const data = await res.json();
-    const pill = document.getElementById('market-pill');
-    const sign = data.spy_chg >= 0 ? '+' : '';
-    pill.textContent = `S&P 500 pre-market  ${sign}${data.spy_chg.toFixed(2)}%  · ${data.label}`;
+    const sign    = data.spy_chg >= 0 ? '+' : '';
+    const prefix  = data.session === 'afterhours' ? 'SPY AH'
+                  : data.session === 'premarket'  ? 'SPY Pre'
+                  : data.session === 'closed'     ? 'SPY Today'
+                  : 'SPY';
+    pill.textContent = `${prefix}  ${sign}${data.spy_chg.toFixed(2)}%  · ${data.label}`;
     pill.className = 'market-pill ' + (data.spy_chg > 0.5 ? 'pill-bull' : data.spy_chg < -0.5 ? 'pill-bear' : 'pill-neutral');
-  } catch(e) {}
+  } catch(e) {
+    pill.textContent = 'SPY  —  (server offline)';
+    pill.className = 'market-pill pill-neutral';
+  }
 }
+
+// Refresh SPY pill every 60 seconds
+setInterval(loadSpy, 60000);
 
 window.addEventListener('load', loadSpy);
 
@@ -264,12 +302,18 @@ async function runScan() {
 }
 
 function renderResults(data) {
+  const isAH   = data.session === 'afterhours';
   const status = document.getElementById('statusMsg');
   status.textContent = `Scan complete — ${data.valid.length} valid setup(s) found.`;
 
+  // After-hours banner
+  document.getElementById('ahBanner').style.display = isAH ? 'block' : 'none';
+
   // Market pill
   const pill = document.getElementById('market-pill');
-  pill.textContent = `SPY ${data.spy_chg > 0 ? '+' : ''}${data.spy_chg.toFixed(2)}%`;
+  const spyLabel = data.spy_chg > 0.5 ? 'BULL' : data.spy_chg < -0.5 ? 'BEAR' : 'NEUTRAL';
+  const spyPrefix = isAH ? 'SPY AH' : 'SPY';
+  pill.textContent = `${spyPrefix}  ${data.spy_chg > 0 ? '+' : ''}${data.spy_chg.toFixed(2)}%  · ${spyLabel}`;
   pill.className = 'market-pill ' + (data.spy_chg > 0.5 ? 'pill-bull' : data.spy_chg < -0.5 ? 'pill-bear' : 'pill-neutral');
 
   // Summary
@@ -281,14 +325,14 @@ function renderResults(data) {
 
   // Valid setups
   if (data.valid.length > 0) {
-    document.getElementById('validGrid').innerHTML = data.valid.map(s => setupCard(s, true)).join('');
+    document.getElementById('validGrid').innerHTML = data.valid.map(s => setupCard(s, true, isAH)).join('');
     document.getElementById('validSection').style.display = 'block';
     data.valid.forEach(s => drawChart(s));
   }
 
   // Candidates
   if (data.candidates.length > 0) {
-    document.getElementById('candidateGrid').innerHTML = data.candidates.map(s => setupCard(s, false)).join('');
+    document.getElementById('candidateGrid').innerHTML = data.candidates.map(s => setupCard(s, false, isAH)).join('');
     document.getElementById('candidateSection').style.display = 'block';
     data.candidates.forEach(s => drawChart(s));
   }
@@ -300,26 +344,36 @@ function renderResults(data) {
   document.getElementById('timestamp').textContent = 'Last scan: ' + data.timestamp;
 }
 
-function setupCard(s, valid) {
-  const gapClass = s.gap_pct >= 0 ? 'gap-up' : 'gap-down';
-  const gapSign  = s.gap_pct >= 0 ? '+' : '';
-  const catBadge = s.catalyst_type ? `<span class="badge badge-catalyst">${s.catalyst_type}</span>` : '';
-  const failsHtml = s.failures.length
+function setupCard(s, valid, isAH = false) {
+  const gapClass  = s.gap_pct >= 0 ? 'gap-up' : 'gap-down';
+  const gapSign   = s.gap_pct >= 0 ? '+' : '';
+  const catBadge  = s.catalyst_type ? `<span class="badge badge-catalyst">${s.catalyst_type}</span>` : '';
+  const ahBadge   = isAH ? `<span class="badge badge-ah">After-Hours</span>` : '';
+  const failsHtml  = s.failures.length
     ? `<div class="fails">${s.failures.map(f => `<p>✗ ${f}</p>`).join('')}</div>` : '';
+  const warnsHtml  = s.warnings.length
+    ? `<div class="warns">${s.warnings.map(w => `<p>⚠ ${w}</p>`).join('')}</div>` : '';
 
-  const levels = valid || (!valid && !s.failures.some(f => f.includes('maximum') || f.includes('minimum') && f.includes('Gap')))
-    ? `
-      <div class="row"><span class="key">Entry</span><span class="val-white">$${s.entry_price.toFixed(2)}</span></div>
-      <div class="row"><span class="key">Close at Loss</span><span class="val-red">$${s.stop_loss.toFixed(2)}</span></div>
+  const priceLabel = isAH ? 'AH Price' : 'Pre-mkt Price';
+  const exitRow    = valid
+    ? (isAH
+        ? `<div class="row"><span class="key">Entry</span><span class="val-white">Tomorrow's open (~$${s.entry_price.toFixed(2)})</span></div>`
+        : `<div class="row"><span class="key">Exit by</span><span class="val-white">11:00 AM ET</span></div>`)
+    : '';
+
+  const levels = `
+      <div class="row"><span class="key">${isAH ? 'Close at Loss' : 'Close at Loss'}</span><span class="val-red">$${s.stop_loss.toFixed(2)}</span></div>
       <div class="row"><span class="key">Close at Profit</span><span class="val-green">$${s.target_price.toFixed(2)}</span></div>
       <div class="row"><span class="key">Risk / share</span><span class="val-white">$${s.risk_per_share.toFixed(2)}</span></div>
       <div class="row"><span class="key">Reward / share</span><span class="val-white">$${s.reward_per_share.toFixed(2)}</span></div>
+      ${valid ? `
       <div class="row"><span class="key">Position Size</span><span class="val-blue">${s.shares} shares</span></div>
       <div class="row"><span class="key">Capital Needed</span><span class="val-blue">$${(s.shares * s.entry_price).toFixed(0)}</span></div>
       <div class="row"><span class="key">Max Loss</span><span class="val-red">$${s.dollar_risk.toFixed(0)}</span></div>
       <div class="row"><span class="key">Max Gain</span><span class="val-green">$${(s.shares * s.reward_per_share).toFixed(0)}</span></div>
-      <div class="row"><span class="key">Exit by</span><span class="val-white">11:00 AM ET</span></div>
-    ` : '';
+      ${exitRow}
+      ` : ''}
+    `;
 
   return `
     <div class="setup-card ${valid ? 'valid' : 'invalid'}" id="card-${s.ticker}">
@@ -327,18 +381,19 @@ function setupCard(s, valid) {
         <div>
           <span class="ticker">${s.ticker}</span>
           <span class="badge ${valid ? 'badge-valid' : 'badge-filtered'}">${valid ? 'VALID' : 'FILTERED'}</span>
-          ${catBadge}
+          ${catBadge}${ahBadge}
         </div>
         <span class="gap ${gapClass}">${gapSign}${s.gap_pct.toFixed(2)}%</span>
       </div>
       <div class="card-body">
-        <div class="row"><span class="key">Prev Close</span><span class="val-white">$${s.prev_close.toFixed(2)}</span></div>
-        <div class="row"><span class="key">Pre-mkt Price</span><span class="val-white">$${s.premarket_price.toFixed(2)}</span></div>
+        <div class="row"><span class="key">${isAH ? "Today's Close" : 'Prev Close'}</span><span class="val-white">$${s.prev_close.toFixed(2)}</span></div>
+        <div class="row"><span class="key">${priceLabel}</span><span class="val-white">$${s.premarket_price.toFixed(2)}</span></div>
         <div class="row"><span class="key">Volume Ratio</span><span class="${s.volume_ratio >= 2 ? 'val-green' : 'val-red'}">${s.volume_ratio.toFixed(1)}x</span></div>
         ${s.rsi ? `<div class="row"><span class="key">RSI (14)</span><span class="${s.rsi > 70 ? 'val-red' : s.rsi < 30 ? 'val-red' : 'val-green'}">${s.rsi.toFixed(0)}</span></div>` : ''}
         ${s.atr ? `<div class="row"><span class="key">ATR (14)</span><span class="val-white">$${s.atr.toFixed(2)}</span></div>` : ''}
         ${levels}
         ${failsHtml}
+        ${warnsHtml}
         ${s.catalyst_headline ? `<div style="margin-top:10px;font-size:0.75rem;color:#5b8fa8;font-style:italic">"${s.catalyst_headline}"</div>` : ''}
       </div>
       <div class="chart-wrap" id="chart-${s.ticker}"></div>
@@ -369,9 +424,9 @@ function drawChart(s) {
       { type:'rect', x0:0, x1:1, xref:'paper', y0:s.entry_price,y1:s.target_price,fillcolor:'#66bb6a', opacity:0.08, line:{width:0} },
     ],
     annotations: [
-      { x:1, xref:'paper', y:s.stop_loss,    text:`$${s.stop_loss.toFixed(2)}`,    showarrow:false, xanchor:'left', font:{color:'#ef5350',size:10} },
-      { x:1, xref:'paper', y:s.entry_price,  text:`$${s.entry_price.toFixed(2)}`,  showarrow:false, xanchor:'left', font:{color:'#ffffff',size:10} },
-      { x:1, xref:'paper', y:s.target_price, text:`$${s.target_price.toFixed(2)}`, showarrow:false, xanchor:'left', font:{color:'#66bb6a',size:10} },
+      { x:1, xref:'paper', y:s.stop_loss,    text:`Stop $${s.stop_loss.toFixed(2)}`,    showarrow:false, xanchor:'left', font:{color:'#ef5350',size:10} },
+      { x:1, xref:'paper', y:s.entry_price,  text:`Entry $${s.entry_price.toFixed(2)}`,  showarrow:false, xanchor:'left', font:{color:'#ffffff',size:10} },
+      { x:1, xref:'paper', y:s.target_price, text:`Target $${s.target_price.toFixed(2)}`, showarrow:false, xanchor:'left', font:{color:'#66bb6a',size:10} },
     ]
   };
 

@@ -24,32 +24,91 @@ import matplotlib.patches as mpatches
 ACCOUNT_SIZE       = 10_000   # Your account size ($)
 RISK_PCT           = 1.0      # Max risk per trade as % of account
 MIN_GAP_PCT        = 2.0      # Minimum gap % to qualify
-MAX_GAP_PCT        = 5.0      # Maximum gap % to qualify
-CAUTION_GAP_PCT    = 10.0     # Gap > this is a caution flag
-MIN_VOLUME_RATIO   = 2.0      # Pre-market volume must be Nx avg
+MAX_GAP_PCT        = 8.0      # Maximum gap % to qualify (raised from 5% — earnings gaps often 6-8%)
+CAUTION_GAP_PCT    = 12.0     # Gap > this is a caution flag
+MIN_VOLUME_RATIO   = 1.5      # Pre-market volume must be Nx avg (lowered from 2.0x)
 VOLUME_LOOKBACK    = 5        # Trading days to average pre-mkt vol over
 MIN_MARKET_CAP     = 5_000_000_000  # Minimum market cap ($5 billion)
 
 NEWSAPI_KEY  = ""             # Get a free key at https://newsapi.org/register
 POLYGON_KEY  = "fPmjWyQMbRNvocDUPYoVgCO7o3GV8yWj"
 
-# Keywords per catalyst type — matched against headline + description
+# ── Catalyst priority tiers ────────────────────────────────────────────────────
+# Lower number = checked first, wins over lower-priority matches across articles.
+# Tier 1: company-specific, directly price-moving — highest confidence
+# Tier 2: corporate actions with moderate specificity
+# Tier 3: macro/geo — valid but broad; only wins if nothing better found
+CATALYST_PRIORITY: dict[str, int] = {
+    "Earnings Beat":    1,
+    "Acquisition/M&A":  1,
+    "FDA Approval":     1,
+    "Product Launch":   1,
+    "Major Contract":   2,
+    "Analyst Upgrade":  2,
+    "Share Buyback":    2,
+    "Geopolitical":     3,
+    "Macro / Fed":      3,
+}
+
+# Keywords are checked in the order defined here (Tier 1 → 2 → 3) within each article.
+# Geopolitical/macro keywords are intentionally narrow — broad terms like "war" or
+# "tariff" appear in general market context and produce too many false positives.
 CATALYST_KEYWORDS: dict[str, list[str]] = {
-    "Earnings Beat":    ["earnings beat", "eps beat", "beat estimates", "beat expectations",
-                         "quarterly results", "revenue beat", "profit surge", "raised guidance",
-                         "earnings surprise"],
-    "Acquisition/M&A":  ["acquisition", "merger", "acquire", "buyout", "takeover",
-                         "to buy ", "buys ", "acquired by", "merge with"],
-    "Major Contract":   ["contract", "awarded", "partnership", "collaboration", "licensing deal",
-                         "supply agreement", "multi-year deal", "government contract"],
-    "Analyst Upgrade":  ["upgrade", "price target raised", "outperform", "buy rating",
-                         "overweight", "strong buy", "initiated coverage"],
-    "Geopolitical":     ["war", "conflict", "sanctions", "military", "stimulus package",
-                         "defense spending", "opec", "oil supply", "crude oil",
-                         "tariff", "trade war", "geopolitical"],
-    "Macro / Fed":      ["interest rate", "federal reserve", "fed rate", "rate hike",
-                         "rate cut", "fomc", "inflation data", "cpi report",
-                         "gdp growth", "monetary policy", "treasury yield"],
+    # ── Tier 1: Company-specific ──────────────────────────────────────────────
+    "Earnings Beat": [
+        "earnings beat", "eps beat", "beat estimates", "beat expectations",
+        "revenue beat", "profit surge", "raised guidance", "earnings surprise",
+        "better than expected", "record revenue", "record earnings",
+        "blowout quarter", "raised outlook", "raised forecast", "topped estimates",
+        "quarterly results", "beat on revenue", "beat on earnings",
+    ],
+    "Acquisition/M&A": [
+        "agrees to acquire", "agreed to acquire", "deal to acquire",
+        "to be acquired", "acquisition", "merger agreement", "takeover bid",
+        "buyout", "acquired by", "merge with", "all-cash deal",
+        "strategic acquisition", "to buy ", "buys ",
+    ],
+    "FDA Approval": [
+        "fda approval", "fda approved", "fda clearance", "approved by fda",
+        "phase 3 results", "phase 3 data", "clinical trial results",
+        "drug approval", "breakthrough therapy designation", "nda approval", "pdufa",
+    ],
+    "Product Launch": [
+        "unveils", "launches new", "announces new", "new chip", "new gpu",
+        "new ai model", "new product line", "next-generation", "new platform",
+        "product announcement", "new model", "new version released",
+        "generative ai", "new processor", "new drug", "new treatment approved",
+    ],
+    # ── Tier 2: Corporate actions ─────────────────────────────────────────────
+    "Major Contract": [
+        "wins contract", "awarded contract", "contract awarded",
+        "multi-billion dollar deal", "multi-year contract", "pentagon contract",
+        "government contract", "exclusive partnership", "licensing deal",
+        "supply agreement", "strategic partnership announced",
+    ],
+    "Analyst Upgrade": [
+        "upgraded to buy", "upgrade to outperform", "price target raised",
+        "raises price target", "increases price target", "strong buy rating",
+        "added to conviction buy", "initiated with buy", "overweight initiated",
+        "bull case", "upgrade", "outperform rating",
+    ],
+    "Share Buyback": [
+        "share buyback", "stock repurchase program", "authorized buyback",
+        "repurchasing shares", "special dividend", "dividend increase",
+        "increased quarterly dividend", "capital return",
+    ],
+    # ── Tier 3: Macro / Geo — narrow terms only ───────────────────────────────
+    "Geopolitical": [
+        "defense contract awarded", "us arms sale", "nato contract",
+        "sanctions lifted", "trade deal signed", "export restriction lifted",
+        "chip export ban", "chip restriction", "peace deal", "ceasefire agreement",
+    ],
+    "Macro / Fed": [
+        "federal reserve cuts", "fed cuts rates", "rate cut announced",
+        "fomc decision", "cpi below expectations", "inflation cooler than expected",
+        "gdp beat expectations", "jobs report blowout", "strong payrolls",
+        "fed pivot",
+    ],
 }
 
 DEFAULT_WATCHLIST = [
@@ -72,8 +131,22 @@ DEFAULT_WATCHLIST = [
 
 ET = pytz.timezone("America/New_York")
 
-PREMARKET_START = time(4, 0)
-MARKET_OPEN     = time(9, 30)
+PREMARKET_START  = time(4, 0)
+MARKET_OPEN      = time(9, 30)
+AFTERHOURS_START = time(16, 0)
+AFTERHOURS_END   = time(20, 0)
+
+
+def get_session() -> str:
+    """Return current market session based on ET time."""
+    t = datetime.now(ET).time()
+    if PREMARKET_START <= t < MARKET_OPEN:
+        return "premarket"
+    if MARKET_OPEN <= t < AFTERHOURS_START:
+        return "regular"
+    if AFTERHOURS_START <= t < AFTERHOURS_END:
+        return "afterhours"
+    return "closed"
 
 # ── Data classes ───────────────────────────────────────────────────────────────
 @dataclass
@@ -99,6 +172,7 @@ class TradeSetup:
     catalyst_headline: str      = ""
     failures:         List[str] = field(default_factory=list)
     warnings:         List[str] = field(default_factory=list)
+    session:          str       = "premarket"
 
 
 ATR_PERIOD = 14   # days used to calculate Average True Range
@@ -123,15 +197,52 @@ def _polygon_snapshot(ticker: str) -> Optional[dict]:
         return None
 
 
-def get_prev_close(ticker: str) -> Optional[float]:
-    """Previous trading day closing price — yfinance primary, Polygon fallback."""
+def get_prev_close(ticker: str, session: str = "") -> Optional[float]:
+    """
+    Baseline closing price for gap calculation.
+    - Pre-market / overnight: yesterday's regular session close (4 PM)
+    - After-hours: today's regular session close (4 PM) — gap is vs today's close
+    """
+    if not session:
+        session = get_session()
+
+    now_et = datetime.now(ET)
+    today  = now_et.date()
+
+    if session == "afterhours":
+        # Need today's regular close — it's in the daily bar for today
+        try:
+            hist = _ticker_history(ticker, period="5d", interval="1d", auto_adjust=True)
+            if not hist.empty and hist.index[-1].date() == today:
+                return float(hist["Close"].iloc[-1])
+        except Exception:
+            pass
+        # Fallback: fast_info last_price approximates close just after 4 PM
+        try:
+            last = getattr(yf.Ticker(ticker).fast_info, "last_price", None)
+            if last and last > 0:
+                return float(last)
+        except Exception:
+            pass
+        return None
+
+    # Pre-market / default: yesterday's regular close
     try:
-        hist = _ticker_history(ticker, period="5d", interval="1d", auto_adjust=True)
-        if not hist.empty and len(hist) >= 2:
-            return float(hist["Close"].iloc[-2])
+        fi = yf.Ticker(ticker).fast_info
+        pc = getattr(fi, "regular_market_previous_close", None) or getattr(fi, "previous_close", None)
+        if pc and pc > 0:
+            return float(pc)
     except Exception:
         pass
-    # Polygon fallback
+    try:
+        hist = _ticker_history(ticker, period="5d", interval="1d", auto_adjust=True)
+        if not hist.empty:
+            if hist.index[-1].date() == today:
+                return float(hist["Close"].iloc[-2]) if len(hist) >= 2 else None
+            else:
+                return float(hist["Close"].iloc[-1])
+    except Exception:
+        pass
     snap = _polygon_snapshot(ticker)
     if snap:
         c = snap.get("prevDay", {}).get("c")
@@ -140,11 +251,16 @@ def get_prev_close(ticker: str) -> Optional[float]:
     return None
 
 
-def get_premarket_price(ticker: str) -> Optional[float]:
+def get_premarket_price(ticker: str, session: str = "") -> Optional[float]:
     """
-    Latest pre-market price.
-    yfinance primary (1m bars with prepost), Polygon snapshot fallback.
+    Returns the relevant extended-hours price based on the current session:
+    - Pre-market (4 AM–9:30 AM): latest pre-market 1m bar
+    - After-hours (4 PM–8 PM):   latest after-hours 1m bar
+    - Otherwise: last available price for the day
     """
+    if not session:
+        session = get_session()
+
     try:
         hist = _ticker_history(ticker, period="2d", interval="1m", prepost=True)
         if not hist.empty:
@@ -152,13 +268,25 @@ def get_premarket_price(ticker: str) -> Optional[float]:
                 hist.index = hist.index.tz_localize("UTC")
             hist.index = hist.index.tz_convert(ET)
             today = datetime.now(ET).date()
-            pm = hist[
-                (hist.index.date == today)
-                & (hist.index.time >= PREMARKET_START)
-                & (hist.index.time < MARKET_OPEN)
-            ]
-            if not pm.empty:
-                return float(pm["Close"].iloc[-1])
+
+            if session == "premarket":
+                rows = hist[
+                    (hist.index.date == today)
+                    & (hist.index.time >= PREMARKET_START)
+                    & (hist.index.time < MARKET_OPEN)
+                ]
+            elif session == "afterhours":
+                rows = hist[
+                    (hist.index.date == today)
+                    & (hist.index.time >= AFTERHOURS_START)
+                    & (hist.index.time < AFTERHOURS_END)
+                ]
+            else:
+                rows = hist[hist.index.date == today]
+
+            if not rows.empty:
+                return float(rows["Close"].iloc[-1])
+
             day_rows = hist[hist.index.date == today]
             if not day_rows.empty:
                 return float(day_rows["Close"].iloc[-1])
@@ -167,7 +295,7 @@ def get_premarket_price(ticker: str) -> Optional[float]:
     # Polygon fallback
     snap = _polygon_snapshot(ticker)
     if snap:
-        for key in ("fmv", ):
+        for key in ("fmv",):
             val = snap.get(key)
             if val:
                 return float(val)
@@ -265,22 +393,103 @@ def get_atr(ticker: str, period: int = ATR_PERIOD) -> Optional[float]:
 
 
 # ── Market condition ──────────────────────────────────────────────────────────
+def _spy_prev_close() -> Optional[float]:
+    """Yesterday's regular 4 PM close — Polygon primary (reliable), yfinance fallback."""
+    # Polygon /prev gives confirmed yesterday close
+    try:
+        url = (f"https://api.polygon.io/v2/aggs/ticker/SPY/prev"
+               f"?adjusted=true&apiKey={POLYGON_KEY}")
+        req = urllib.request.Request(url, headers={"User-Agent": "gap-scanner/1.0"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read())
+        results = data.get("results", [])
+        if results:
+            return float(results[0]["c"])
+    except Exception:
+        pass
+    # yfinance fallback
+    try:
+        fi = yf.Ticker("SPY").fast_info
+        pc = (getattr(fi, "regular_market_previous_close", None)
+              or getattr(fi, "previous_close", None))
+        if pc and pc > 0:
+            return float(pc)
+    except Exception:
+        pass
+    return None
+
+
+def _spy_intraday_bars(today) -> "pd.DataFrame":
+    """1-minute bars for today including pre/post market via yfinance."""
+    hist = _ticker_history("SPY", period="2d", interval="1m", prepost=True)
+    if hist.empty:
+        return hist
+    if hist.index.tz is None:
+        hist.index = hist.index.tz_localize("UTC")
+    hist.index = hist.index.tz_convert(ET)
+    return hist[hist.index.date == today]
+
+
 def get_spy_change() -> float:
     """
-    Return SPY % change based on pre-market price vs previous close.
-    This reflects market sentiment before the open, which is when the scanner runs.
-    Falls back to regular session change if pre-market data is unavailable.
+    SPY % change, always vs the right baseline for the session:
+    - Pre-market:     latest pre-market bar vs yesterday's close  (Polygon close)
+    - Regular:        current last price vs yesterday's close
+    - After-hours:    latest AH bar vs today's 4 PM close
+    - Closed (night): today's 4 PM close vs yesterday's close  (full-day result)
     """
     try:
-        prev_close = get_prev_close("SPY")
+        session = get_session()
+        now_et  = datetime.now(ET)
+        today   = now_et.date()
+
+        prev_close = _spy_prev_close()
         if not prev_close:
             return 0.0
-        pm_price = get_premarket_price("SPY")
-        if not pm_price:
-            return 0.0
-        return float((pm_price - prev_close) / prev_close * 100)
+
+        # ── Pre-market ─────────────────────────────────────────────────────────
+        if session == "premarket":
+            try:
+                bars = _spy_intraday_bars(today)
+                pm   = bars[(bars.index.time >= PREMARKET_START) & (bars.index.time < MARKET_OPEN)]
+                if not pm.empty:
+                    return round((float(pm["Close"].iloc[-1]) - prev_close) / prev_close * 100, 2)
+            except Exception:
+                pass
+
+        # ── After-hours ────────────────────────────────────────────────────────
+        if session == "afterhours":
+            try:
+                bars = _spy_intraday_bars(today)
+                reg  = bars[bars.index.time < AFTERHOURS_START]
+                ah   = bars[(bars.index.time >= AFTERHOURS_START) & (bars.index.time < AFTERHOURS_END)]
+                if not reg.empty and not ah.empty:
+                    today_close = float(reg["Close"].iloc[-1])
+                    ah_price    = float(ah["Close"].iloc[-1])
+                    return round((ah_price - today_close) / today_close * 100, 2)
+                if not ah.empty:
+                    return round((float(ah["Close"].iloc[-1]) - prev_close) / prev_close * 100, 2)
+            except Exception:
+                pass
+
+        # ── Closed (overnight) — show today's full-day result ─────────────────
+        if session == "closed":
+            try:
+                hist = _ticker_history("SPY", period="2d", interval="1d", auto_adjust=True)
+                if not hist.empty and hist.index[-1].date() == today:
+                    return round((float(hist["Close"].iloc[-1]) - prev_close) / prev_close * 100, 2)
+            except Exception:
+                pass
+
+        # ── Regular session fallback ───────────────────────────────────────────
+        fi   = yf.Ticker("SPY").fast_info
+        last = getattr(fi, "last_price", None) or getattr(fi, "open", None)
+        if last and last > 0:
+            return round((float(last) - prev_close) / prev_close * 100, 2)
+
     except Exception:
-        return 0.0
+        pass
+    return 0.0
 
 
 def market_multiplier(spy_chg: float) -> float:
@@ -299,7 +508,8 @@ def market_multiplier(spy_chg: float) -> float:
 
 # ── News & catalyst detection ─────────────────────────────────────────────────
 def _classify(text: str) -> tuple[str, str]:
-    """Return (catalyst_type, matched_keyword) or ('', '') if no match."""
+    """Return (catalyst_type, matched_keyword) or ('', '') if no match.
+    Keywords are checked in CATALYST_KEYWORDS order (Tier 1 → 2 → 3)."""
     lower = text.lower()
     for catalyst, keywords in CATALYST_KEYWORDS.items():
         for kw in keywords:
@@ -348,8 +558,9 @@ def fetch_newsapi_news(ticker: str, company_name: str) -> list[dict]:
 
 def detect_catalyst(ticker: str) -> tuple[str, str]:
     """
-    Scan Yahoo Finance + NewsAPI headlines for a known catalyst.
-    Returns (catalyst_type, headline) — both empty strings if nothing found.
+    Scan Yahoo Finance + NewsAPI headlines for a catalyst.
+    Reads ALL articles and returns the highest-priority match (Tier 1 beats Tier 3).
+    Company-specific catalysts always win over broad geo/macro signals.
     """
     t    = yf.Ticker(ticker)
     name = ""
@@ -361,14 +572,23 @@ def detect_catalyst(ticker: str) -> tuple[str, str]:
 
     articles = fetch_yahoo_news(ticker) + fetch_newsapi_news(ticker, name)
 
+    best_cat      = ""
+    best_headline = ""
+    best_priority = 999
+
     for article in articles:
         combined = article["title"] + " " + article["summary"]
         cat, _   = _classify(combined)
         if cat:
-            headline = article["title"][:120]
-            return cat, headline
+            priority = CATALYST_PRIORITY.get(cat, 99)
+            if priority < best_priority:
+                best_priority = priority
+                best_cat      = cat
+                best_headline = article["title"][:120]
+                if best_priority == 1:
+                    break   # Tier 1 found — no need to keep searching
 
-    return "", ""
+    return best_cat, best_headline
 
 
 # ── Setup calculation ──────────────────────────────────────────────────────────
@@ -386,20 +606,24 @@ def build_setup(
     spy_gap_pct: float = 0.0,
     account_size: float = ACCOUNT_SIZE,
     risk_pct: float = RISK_PCT,
+    session: str = "premarket",
 ) -> TradeSetup:
 
     gap_pct = (pm_price - prev_close) / prev_close * 100
 
     entry = pm_price
 
+    # Gap midpoint is the agreed baseline: stop never goes below the 50% gap level
+    gap_midpoint_dist = (pm_price - prev_close) * 0.5 * mkt_mult
+
     if atr and atr > 0:
-        # Volatility-adaptive: stop = 1× ATR below entry, target = 1.5× ATR above (× market mult)
-        stop_dist = atr * mkt_mult
-        target_dist = atr * 1.5 * mkt_mult
+        # Use ATR for volatility-awareness, but cap at the 50% gap midpoint
+        # This prevents the stop from eating into the full gap on large-ATR stocks
+        stop_dist = min(atr * mkt_mult, gap_midpoint_dist)
     else:
-        # Fallback: 50% of gap for stop, 1.5:1 R:R for target
-        stop_dist   = (pm_price - prev_close) * 0.5 * mkt_mult
-        target_dist = stop_dist * 1.5
+        stop_dist = gap_midpoint_dist
+
+    target_dist = stop_dist * 1.5   # 1.5:1 R:R always
 
     stop           = entry - stop_dist
     target         = entry + target_dist
@@ -421,32 +645,39 @@ def build_setup(
     if volume_ratio < MIN_VOLUME_RATIO:
         failures.append(f"Volume {volume_ratio:.1f}x below minimum {MIN_VOLUME_RATIO}x")
 
-    # ── Catalyst (hard requirement) ─────────────────────────────────────────────
+    # ── Catalyst — warning only, not a hard block ──────────────────────────────
+    # Keyword matching misses many legitimate catalysts; trader should verify manually
     if not catalyst_type:
-        failures.append("No news catalyst detected — skip until confirmed")
+        warnings.append("No catalyst auto-detected — verify news before trading")
 
-    # ── RSI: not overbought, not oversold ──────────────────────────────────────
+    # ── RSI: hard block only on extreme oversold; overbought is a warning ──────
     if rsi is not None:
-        if rsi > 70:
-            failures.append(f"RSI {rsi:.0f} — overbought, gap likely to fade")
+        if rsi > 80:
+            failures.append(f"RSI {rsi:.0f} — extremely overbought, high fade risk")
+        elif rsi > 70:
+            warnings.append(f"RSI {rsi:.0f} — overbought, watch for early fade")
         elif rsi < 30:
             failures.append(f"RSI {rsi:.0f} — oversold, avoid gap-up in weak trend")
 
-    # ── Trend: price above 20-day SMA ──────────────────────────────────────────
+    # ── Trend: SMA filter is a warning, not a hard block ──────────────────────
     if sma20 is not None and prev_close < sma20:
-        failures.append(f"Price ${prev_close:.2f} below 20-day SMA ${sma20:.2f} — downtrend")
+        warnings.append(f"Price ${prev_close:.2f} below 20-day SMA ${sma20:.2f} — counter-trend move")
 
-    # ── Relative strength: stock must gap more than SPY ────────────────────────
+    # ── Relative strength vs SPY — warning only ───────────────────────────────
     if spy_gap_pct > 0 and gap_pct <= spy_gap_pct:
-        failures.append(f"Gap {gap_pct:.2f}% not exceeding SPY {spy_gap_pct:.2f}% — no relative strength")
+        warnings.append(f"Gap {gap_pct:.2f}% not exceeding SPY {spy_gap_pct:.2f}% — weak relative strength")
 
-    # ── ATR ratio: gap meaningful but not exhausted ────────────────────────────
+    # ── ATR ratio: widened range, extreme exhaustion is still a hard block ─────
     if atr and atr > 0:
         gap_atr_ratio = (pm_price - prev_close) / atr
-        if gap_atr_ratio < 0.5:
+        if gap_atr_ratio < 0.3:
             failures.append(f"Gap only {gap_atr_ratio:.1f}× ATR — too small to be meaningful")
+        elif gap_atr_ratio > 3.0:
+            label = "after-hours" if session == "afterhours" else "pre-market"
+            failures.append(f"Gap {gap_atr_ratio:.1f}× ATR — move likely exhausted {label}")
         elif gap_atr_ratio > 2.0:
-            failures.append(f"Gap {gap_atr_ratio:.1f}× ATR — move likely exhausted pre-market")
+            label = "after-hours" if session == "afterhours" else "pre-market"
+            warnings.append(f"Gap {gap_atr_ratio:.1f}× ATR — extended {label}, enter carefully")
 
     if gap_pct > CAUTION_GAP_PCT:
         warnings.append(f"Gap > {CAUTION_GAP_PCT}% — momentum may already be played out")
@@ -473,6 +704,7 @@ def build_setup(
         catalyst_headline=catalyst_headline,
         failures=failures,
         warnings=warnings,
+        session=session,
     )
 
 

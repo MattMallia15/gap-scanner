@@ -16,6 +16,7 @@ from gap_scanner import (
     get_prev_close, get_premarket_price, get_market_cap,
     get_volume_ratio, get_atr, get_rsi, get_sma,
     detect_catalyst, build_setup, _ticker_history,
+    EMA_WATCHLIST, EMA_START_HOUR, EMA_EXIT_HOUR, scan_ema_crossover,
 )
 
 app = Flask(__name__)
@@ -136,6 +137,50 @@ def scan():
         "session":    session,
         "spy_chg":    round(spy_chg, 2),
         "mult":       round(mult, 2),
+        "timestamp":  now_et.strftime("%Y-%m-%d %H:%M %Z"),
+    })
+
+
+@app.route("/scan_ema")
+def scan_ema():
+    from datetime import time as dtime
+    now_et  = datetime.now(ET)
+    session = get_session()
+    results = []
+
+    for ticker in EMA_WATCHLIST:
+        setup = scan_ema_crossover(ticker)
+        if setup:
+            results.append({
+                "ticker":           setup.ticker,
+                "signal_time":      setup.signal_time,
+                "confirm_time":     setup.confirm_time,
+                "entry_price":      setup.entry_price,
+                "stop_loss":        setup.stop_loss,
+                "target_price":     setup.target_price,
+                "risk_per_share":   setup.risk_per_share,
+                "reward_per_share": setup.reward_per_share,
+                "rr_ratio":         setup.rr_ratio,
+                "shares":           setup.shares,
+                "dollar_risk":      setup.dollar_risk,
+                "volume_ratio":     setup.volume_ratio,
+                "ema_fast":         setup.ema_fast,
+                "ema_slow":         setup.ema_slow,
+                "crossover_low":    setup.crossover_low,
+                "valid":            setup.valid,
+                "failures":         setup.failures,
+                "warnings":         setup.warnings,
+            })
+
+    active = now_et.time() >= EMA_START_HOUR and now_et.time() < EMA_EXIT_HOUR
+    valid      = [s for s in results if s["valid"]]
+    candidates = [s for s in results if not s["valid"]]
+
+    return jsonify({
+        "valid":      valid,
+        "candidates": candidates,
+        "total":      len(EMA_WATCHLIST),
+        "active":     active,
         "timestamp":  now_et.strftime("%Y-%m-%d %H:%M %Z"),
     })
 

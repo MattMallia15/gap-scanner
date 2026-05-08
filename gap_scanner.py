@@ -136,6 +136,19 @@ MARKET_OPEN      = time(9, 30)
 AFTERHOURS_START = time(16, 0)
 AFTERHOURS_END   = time(20, 0)
 
+# ── Strategy 2: EMA Crossover config ──────────────────────────────────────────
+EMA_FAST_PERIOD      = 9
+EMA_SLOW_PERIOD      = 21
+EMA_MIN_VOLUME_RATIO = 1.5
+EMA_START_HOUR       = time(10, 0)   # ignore crossovers before 10 AM
+EMA_EXIT_HOUR        = time(14, 0)   # exit / stop scanning at 2 PM
+
+EMA_WATCHLIST = [
+    "SPY", "QQQ",
+    "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "AMD",
+    "JPM", "BAC", "COIN", "PLTR", "UBER", "SOFI",
+]
+
 
 def get_session() -> str:
     """Return current market session based on ET time."""
@@ -173,6 +186,28 @@ class TradeSetup:
     failures:         List[str] = field(default_factory=list)
     warnings:         List[str] = field(default_factory=list)
     session:          str       = "premarket"
+
+
+@dataclass
+class EMASetup:
+    ticker:           str
+    signal_time:      str
+    confirm_time:     str
+    entry_price:      float
+    stop_loss:        float
+    target_price:     float
+    risk_per_share:   float
+    reward_per_share: float
+    rr_ratio:         float
+    shares:           int
+    dollar_risk:      float
+    volume_ratio:     float
+    ema_fast:         float
+    ema_slow:         float
+    crossover_low:    float
+    valid:            bool      = False
+    failures:         List[str] = field(default_factory=list)
+    warnings:         List[str] = field(default_factory=list)
 
 
 ATR_PERIOD = 14   # days used to calculate Average True Range
@@ -706,6 +741,129 @@ def build_setup(
         warnings=warnings,
         session=session,
     )
+
+
+# ── Strategy 2: EMA Crossover scanner ────────────────────────────────────────
+def _compute_ema(series: pd.Series, period: int) -> pd.Series:
+    return series.ewm(span=period, adjust=False).mean()
+
+
+def scan_ema_crossover(
+    ticker: str,
+    account_size: float = ACCOUNT_SIZE,
+    risk_pct: float = RISK_PCT,
+) -> Optional[EMASetup]:
+    """
+    Detects a confirmed EMA(9)/EMA(21) bullish crossover on 5-min candles after 10 AM.
+    Entry = close of the candle AFTER the crossover candle.
+    Stop  = low of the crossover candle.
+    Target = entry + 2× risk  (2:1 R:R).
+    Returns None if no signal found or outside valid trading hours.
+    """
+    now_et = datetime.now(ET)
+    now_t  = now_et.time()
+    today  = now_et.date()
+
+    if now_t < EMA_START_HOUR or now_t >= EMA_EXIT_HOUR:
+        return None
+
+    try:
+        # 5-day lookback so the EMA is properly warmed up before today's candles
+        hist = _ticker_history(ticker, period="5d", interval="5m")
+        if hist.empty or len(hist) < EMA_SLOW_PERIOD + 10:
+            return None
+
+        if isinstance(hist.columns, pd.MultiIndex):
+            hist.columns = hist.columns.get_level_values(0)
+        if hist.index.tz is None:
+            hist.index = hist.index.tz_localize("UTC")
+        hist.index = hist.index.tz_convert(ET)
+
+        # Compute EMAs on all data (warm-up), then filter
+        hist = hist.copy()
+        hist["ema_fast"]    = _compute_ema(hist["Close"], EMA_FAST_PERIOD)
+        hist["ema_slow"]    = _compute_ema(hist["Close"], EMA_SLOW_PERIOD)
+        hist["above"]       = hist["ema_fast"] > hist["ema_slow"]
+        hist["cross_above"] = hist["above"] & ~hist["above"].shift(1).fillna(False)
+
+        # Only today's candles from 10 AM onward
+        today_bars = hist[
+            (hist.index.date == today) & (hist.index.time >= EMA_START_HOUR)
+        ]
+        if len(today_bars) < 2:
+            return None
+
+        # Signal must still be active — EMA(9) above EMA(21) right now
+        latest = today_bars.iloc[-1]
+        if not latest["above"]:
+            return None
+
+        # Look for a crossover in the last 3 completed candles (not the live forming one)
+        lookback = today_bars.iloc[:-1].tail(3)
+        crossover_row = None
+        for i in range(len(lookback) - 1, -1, -1):
+            if lookback.iloc[i]["cross_above"]:
+                crossover_row = lookback.iloc[i]
+                break
+
+        if crossover_row is None:
+            return None
+
+        # Confirm candle = the bar immediately after the crossover
+        cross_loc = today_bars.index.get_loc(crossover_row.name)
+        if cross_loc + 1 >= len(today_bars):
+            return None
+        confirm_row = today_bars.iloc[cross_loc + 1]
+
+        entry     = float(confirm_row["Close"])
+        cross_low = float(crossover_row["Low"])
+        risk      = entry - cross_low
+        if risk <= 0:
+            return None
+
+        target      = entry + 2.0 * risk
+        dollar_risk = account_size * (risk_pct / 100)
+        shares      = max(int(dollar_risk / risk), 0)
+
+        volume_ratio = get_volume_ratio(ticker)
+
+        failures: List[str] = []
+        warnings: List[str] = []
+
+        if volume_ratio < EMA_MIN_VOLUME_RATIO:
+            failures.append(
+                f"Volume {volume_ratio:.1f}x below {EMA_MIN_VOLUME_RATIO}x — crossover unreliable on low volume"
+            )
+
+        # Chop check: 3+ crossovers in last 30 min (6 candles) = whipsaw market
+        crossovers_30 = int(today_bars.tail(7)["cross_above"].sum())
+        if crossovers_30 >= 3:
+            failures.append(f"{crossovers_30} crossovers in 30 min — choppy, skip")
+        elif crossovers_30 == 2:
+            warnings.append("Two crossovers recently — watch for chop")
+
+        return EMASetup(
+            ticker=ticker,
+            signal_time=crossover_row.name.strftime("%H:%M"),
+            confirm_time=confirm_row.name.strftime("%H:%M"),
+            entry_price=round(entry, 2),
+            stop_loss=round(cross_low, 2),
+            target_price=round(target, 2),
+            risk_per_share=round(risk, 2),
+            reward_per_share=round(2.0 * risk, 2),
+            rr_ratio=2.0,
+            shares=shares,
+            dollar_risk=round(dollar_risk, 2),
+            volume_ratio=round(volume_ratio, 2),
+            ema_fast=round(float(latest["ema_fast"]), 2),
+            ema_slow=round(float(latest["ema_slow"]), 2),
+            crossover_low=round(cross_low, 2),
+            valid=len(failures) == 0,
+            failures=failures,
+            warnings=warnings,
+        )
+    except Exception:
+        return None
 
 
 # ── Display ────────────────────────────────────────────────────────────────────

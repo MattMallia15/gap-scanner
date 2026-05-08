@@ -455,6 +455,8 @@ function renderEMAResults(data) {
 }
 
 function emaCard(s, valid) {
+  const key = 'ema_' + s.ticker;
+  _setupStore[key] = s;
   const failsHtml = s.failures.length
     ? `<div class="fails">${s.failures.map(f => `<p>✗ ${f}</p>`).join('')}</div>` : '';
   const warnsHtml = s.warnings.length
@@ -488,10 +490,13 @@ function emaCard(s, valid) {
         <div class="row"><span class="key">Exit by</span><span class="val-white">8:00 PM CET</span></div>
         ` : ''}
         ${failsHtml}${warnsHtml}
-        ${valid ? `<button class="log-btn" id="logbtn-ema-${s.ticker}" onclick="logTrade(this, ${JSON.stringify(s)}, 'ema_crossover')">📋 Log this trade</button>` : ''}
+        ${valid ? `<button class="log-btn" id="logbtn-ema-${s.ticker}" onclick="logTrade(this,'${key}','ema_crossover')">📋 Log this trade</button>` : ''}
       </div>
     </div>`;
 }
+
+// Global store so onclick handlers can look up setup data safely
+const _setupStore = {};
 
 async function loadSpy() {
   const pill = document.getElementById('market-pill');
@@ -587,6 +592,8 @@ function renderResults(data) {
 }
 
 function setupCard(s, valid, isAH = false) {
+  const key = 'gg_' + s.ticker;
+  _setupStore[key] = s;
   const gapClass  = s.gap_pct >= 0 ? 'gap-up' : 'gap-down';
   const gapSign   = s.gap_pct >= 0 ? '+' : '';
   const catBadge  = s.catalyst_type ? `<span class="badge badge-catalyst">${s.catalyst_type}</span>` : '';
@@ -637,7 +644,7 @@ function setupCard(s, valid, isAH = false) {
         ${failsHtml}
         ${warnsHtml}
         ${s.catalyst_headline ? `<div style="margin-top:10px;font-size:0.75rem;color:#5b8fa8;font-style:italic">"${s.catalyst_headline}"</div>` : ''}
-        ${valid ? `<button class="log-btn" id="logbtn-${s.ticker}" onclick="logTrade(this, ${JSON.stringify(s)}, 'gap_go')">📋 Log this trade</button>` : ''}
+        ${valid ? `<button class="log-btn" id="logbtn-${s.ticker}" onclick="logTrade(this,'${key}','gap_go')">📋 Log this trade</button>` : ''}
       </div>
       <div class="chart-wrap" id="chart-${s.ticker}"></div>
     </div>`;
@@ -700,7 +707,9 @@ function switchTab(n) {
 }
 
 // ── Log a trade ───────────────────────────────────────────────────────────────
-async function logTrade(btn, setup, strategy) {
+async function logTrade(btn, key, strategy) {
+  const setup = _setupStore[key];
+  if (!setup) { alert('Setup data not found — run a scan first.'); return; }
   btn.disabled = true;
   btn.textContent = 'Logging…';
   try {

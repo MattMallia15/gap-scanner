@@ -386,15 +386,18 @@
 function switchTab(n) {
   document.getElementById('strategy1').style.display = n === 1 ? 'block' : 'none';
   document.getElementById('strategy2').style.display = n === 2 ? 'block' : 'none';
+  document.getElementById('strategy3').style.display = n === 3 ? 'block' : 'none';
   document.getElementById('tab1').classList.toggle('active', n === 1);
   document.getElementById('tab2').classList.toggle('active', n === 2);
-  if (n === 1) {
-    document.getElementById('header-title').textContent = 'Gap & Go Scanner';
-    document.getElementById('header-sub').textContent   = 'Pre-market momentum scanner · Gap 2–8% · $10,000 account';
-  } else {
-    document.getElementById('header-title').textContent = 'EMA Crossover Scanner';
-    document.getElementById('header-sub').textContent   = 'EMA(9) / EMA(21) · 5-min candles · 4:00 PM – 8:00 PM CET';
-  }
+  document.getElementById('tab3').classList.toggle('active', n === 3);
+  const titles = {
+    1: ['Gap & Go Scanner',      'Pre-market momentum scanner · Gap 2–8% · $10,000 account'],
+    2: ['EMA Crossover Scanner', 'EMA(9) / EMA(21) · 5-min candles · 4:00 PM – 8:00 PM CET'],
+    3: ['Trade Journal',         'All logged trades · P&L tracking'],
+  };
+  document.getElementById('header-title').textContent = titles[n][0];
+  document.getElementById('header-sub').textContent   = titles[n][1];
+  if (n === 3) loadJournal();
 }
 
 // ── EMA scan ──────────────────────────────────────────────────────────────────
@@ -686,24 +689,6 @@ function drawChart(s) {
   ];
 
   Plotly.newPlot(`chart-${s.ticker}`, traces, layout, {displayModeBar: false, responsive: true});
-}
-
-// ── Tab switcher update for journal ──────────────────────────────────────────
-const _origSwitchTab = switchTab;
-function switchTab(n) {
-  document.getElementById('strategy3').style.display = n === 3 ? 'block' : 'none';
-  document.getElementById('tab3').classList.toggle('active', n === 3);
-  if (n === 3) {
-    document.getElementById('strategy1').style.display = 'none';
-    document.getElementById('strategy2').style.display = 'none';
-    document.getElementById('tab1').classList.remove('active');
-    document.getElementById('tab2').classList.remove('active');
-    document.getElementById('header-title').textContent = 'Trade Journal';
-    document.getElementById('header-sub').textContent   = 'All logged trades · P&L tracking';
-    loadJournal();
-  } else {
-    _origSwitchTab(n);
-  }
 }
 
 // ── Log a trade ───────────────────────────────────────────────────────────────
